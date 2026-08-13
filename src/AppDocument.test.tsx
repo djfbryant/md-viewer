@@ -81,9 +81,11 @@ describe('basic anonymous documents', () => {
 
   it('does not disclose document content for an unknown share link', () => {
     window.history.replaceState({}, '', '/s/not-a-document');
+    document.title = 'Previously viewed secret · MarkShare';
     render(<App />);
 
     expect(screen.getByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();
+    expect(document.title).toBe('MarkShare');
     expect(screen.queryByText('Hello reader')).not.toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: /markdown document/i })).not.toBeInTheDocument();
   });

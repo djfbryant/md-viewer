@@ -5,6 +5,7 @@ const mermaidApi = vi.hoisted(() => ({
   initialize: vi.fn(),
   render: vi.fn(async (_id: string, source: string) => {
     if (source.includes('not a diagram')) throw new Error('invalid diagram');
+    if (source.includes('unsafe output')) return { svg: '<svg role="img" onload="alert(1)"><script>alert(1)</script><a href="javascript:alert(1)">Bad</a></svg>' };
     return { svg: '<svg role="img" aria-label="Rendered Mermaid diagram"></svg>' };
   }),
 }));
@@ -37,6 +38,7 @@ describe('Markdown interpretation', () => {
       filename: 'Release notes v2.md',
       mediaType: 'text/markdown;charset=utf-8',
     });
+    expect(interpretMarkdown('# Hello <b>world</b>').title).toBe('Hello world');
   });
 
   it('renders GitHub-style tables, task lists, footnotes, and highlighted code', () => {
@@ -79,7 +81,7 @@ describe('Markdown interpretation', () => {
   it('renders Mermaid through the strict policy and falls back safely for invalid diagrams', async () => {
     const valid = render(<MarkdownView document={interpretMarkdown('```mermaid\ngraph TD\nA-->B\n```')} />);
 
-    expect(await screen.findByRole('img', { name: 'Rendered Mermaid diagram' })).toBeInTheDocument();
+    expect(await screen.findByRole('img', { name: 'Mermaid diagram' })).toBeInTheDocument();
     expect(mermaidApi.initialize).toHaveBeenCalledWith(expect.objectContaining({
       securityLevel: 'strict',
       startOnLoad: false,
@@ -89,5 +91,27 @@ describe('Markdown interpretation', () => {
     render(<MarkdownView document={interpretMarkdown('```mermaid\nnot a diagram\n```')} />);
     expect(await screen.findByText('This diagram could not be rendered safely.')).toBeInTheDocument();
     expect(screen.getByText('not a diagram')).toBeInTheDocument();
+  });
+
+  it('rejects interactive Mermaid input and sanitizes renderer output', async () => {
+    mermaidApi.render.mockClear();
+    const hostileSource = [
+      '```mermaid',
+      '%%{init: {"securityLevel": "loose"}}%%',
+      'graph TD',
+      'click A "javascript:alert(1)"',
+      '```',
+    ].join('\n');
+    const hostile = render(<MarkdownView document={interpretMarkdown(hostileSource)} />);
+
+    expect(await screen.findByText('This diagram could not be rendered safely.')).toBeInTheDocument();
+    expect(mermaidApi.render).not.toHaveBeenCalled();
+    hostile.unmount();
+
+    const output = render(<MarkdownView document={interpretMarkdown('```mermaid\nunsafe output\n```')} />);
+    expect(await screen.findByRole('img', { name: 'Mermaid diagram' })).toBeInTheDocument();
+    expect(output.container.querySelector('script')).toBeNull();
+    expect(output.container.querySelector('[onload]')).toBeNull();
+    expect(output.container.innerHTML).not.toContain('javascript:');
   });
 });

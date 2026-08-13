@@ -147,6 +147,10 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
 }
 
 function ReaderLayout({ actions, children, title }: { actions?: React.ReactNode; children: React.ReactNode; title?: string }) {
+  useEffect(() => {
+    window.document.title = title ? `${title} · MarkShare` : 'MarkShare';
+  }, [title]);
+
   return <main className="reader-shell">
     <header className="app-bar reader-bar"><Brand />{title && <div className="document-title"><span>{title}</span><span className="pill">Read only</span></div>}{actions && <div className="bar-actions">{actions}</div>}</header>
     {children}
@@ -155,10 +159,6 @@ function ReaderLayout({ actions, children, title }: { actions?: React.ReactNode;
 
 function Reader({ document }: { document: SharedDocument }) {
   const interpreted = useMemo(() => interpretMarkdown(document.markdown), [document.markdown]);
-
-  useEffect(() => {
-    window.document.title = `${interpreted.title} · MarkShare`;
-  }, [interpreted.title]);
 
   return <ReaderLayout
     actions={<button className="button" onClick={() => downloadMarkdown(interpreted)}>Download .md</button>}
