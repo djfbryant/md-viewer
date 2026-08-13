@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getShareId, sharePath, shareUrl } from './document';
 import { type SharedDocument } from './document-lifecycle';
 import { documentLifecycle } from './lib/instant-document-persistence';
+import { downloadMarkdown, interpretMarkdown, MarkdownView } from './markdown';
 import { applyTheme, getStoredTheme, nextTheme, type ThemePreference, storeTheme } from './theme';
 
 const DEFAULT_SPLIT = 50;
@@ -56,6 +56,7 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
   const [publishedId, setPublishedId] = useState<string | null>(null);
   const panesRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
+  const interpreted = useMemo(() => interpretMarkdown(markdown), [markdown]);
 
   const applySplit = (next: number) => {
     const clamped = Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, Math.round(next)));
@@ -113,7 +114,7 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
       <header className="app-bar">
         <button className="brand brand-button" onClick={onBack} aria-label="Back to MarkShare home"><Brand /></button>
         <div className="document-title">
-          <span>New document</span>
+          <span>{markdown.trim() ? interpreted.title : 'New document'}</span>
           <span className="pill pill--saved">Draft</span>
         </div>
         <div className="bar-actions">
@@ -135,7 +136,7 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
         <button className="splitter" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} onDoubleClick={resetSplit} onKeyDown={resizeByKeyboard} role="separator" aria-orientation="vertical" aria-label="Resize the write and preview panes" aria-valuenow={Math.round(split)} aria-valuemin={MIN_SPLIT} aria-valuemax={MAX_SPLIT} title="Drag to resize · double-click to reset" />
         <section className="pane pane-preview" aria-label="Document preview">
           <div className="pane-head"><span className="label">Preview</span><span className="preview-note">matches share link</span></div>
-          <div className="preview"><article className={markdown ? 'markdown' : 'preview-placeholder'}>{markdown ? <ReactMarkdown>{markdown}</ReactMarkdown> : <><h1>Your preview will appear here</h1><p>Write Markdown, then publish a read-only share link.</p></>}</article></div>
+          <div className="preview"><article className={markdown ? 'markdown' : 'preview-placeholder'}>{markdown ? <MarkdownView document={interpreted} /> : <><h1>Your preview will appear here</h1><p>Write Markdown, then publish a read-only share link.</p></>}</article></div>
         </section>
       </div>
       <footer className="status-footer"><span>{markdown.trim() ? `${markdown.trim().split(/\s+/).length} words` : 'Draft document'}</span><span className="status-url">{publishedId ? shareUrl(publishedId) : 'Publish to create a share link'}</span></footer>
@@ -145,15 +146,24 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
   );
 }
 
-function ReaderLayout({ children, title }: { children: React.ReactNode; title?: string }) {
+function ReaderLayout({ actions, children, title }: { actions?: React.ReactNode; children: React.ReactNode; title?: string }) {
   return <main className="reader-shell">
-    <header className="app-bar reader-bar"><Brand />{title && <div className="document-title"><span>{title}</span><span className="pill">Read only</span></div>}</header>
+    <header className="app-bar reader-bar"><Brand />{title && <div className="document-title"><span>{title}</span><span className="pill">Read only</span></div>}{actions && <div className="bar-actions">{actions}</div>}</header>
     {children}
   </main>;
 }
 
 function Reader({ document }: { document: SharedDocument }) {
-  return <ReaderLayout title={document.title}><div className="reader-content"><article className="markdown"><ReactMarkdown>{document.markdown}</ReactMarkdown></article></div></ReaderLayout>;
+  const interpreted = useMemo(() => interpretMarkdown(document.markdown), [document.markdown]);
+
+  useEffect(() => {
+    window.document.title = `${interpreted.title} · MarkShare`;
+  }, [interpreted.title]);
+
+  return <ReaderLayout
+    actions={<button className="button" onClick={() => downloadMarkdown(interpreted)}>Download .md</button>}
+    title={interpreted.title}
+  ><div className="reader-content"><article className="markdown"><MarkdownView document={interpreted} /></article></div></ReaderLayout>;
 }
 
 function MissingDocument() {
@@ -172,8 +182,8 @@ export function App() {
   const [pathname, setPathname] = useState(() => window.location.pathname);
 
   useEffect(() => {
-    document.title = 'MarkShare';
-  }, []);
+    if (!pathname.startsWith('/s/')) window.document.title = 'MarkShare';
+  }, [pathname]);
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');

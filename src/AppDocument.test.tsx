@@ -38,15 +38,20 @@ beforeEach(() => {
   window.matchMedia = vi.fn().mockImplementation(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe('basic anonymous documents', () => {
   it('publishes Markdown with an opaque read-only share link and renders it for a reader', async () => {
+    const markdown = '# Release notes\n\nHello **reader**.';
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
-    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Release notes\n\nHello **reader**.' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: markdown } });
 
     expect(screen.getByRole('heading', { name: 'Release notes' })).toBeInTheDocument();
+    const previewMarkup = screen.getByLabelText('Document preview').querySelector('article')?.innerHTML;
     fireEvent.click(screen.getByRole('button', { name: /publish/i }));
 
     expect(await screen.findByRole('heading', { name: 'Your document is live' })).toBeInTheDocument();
@@ -55,6 +60,23 @@ describe('basic anonymous documents', () => {
     expect(await screen.findByText('Read only')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Release notes' })).toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: /markdown document/i })).not.toBeInTheDocument();
+    expect(document.querySelector('.reader-content article')?.innerHTML).toBe(previewMarkup);
+    expect(document.title).toBe('Release notes · MarkShare');
+
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:markdown-source');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    let download: { filename: string; href: string } | undefined;
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      download = { filename: this.download, href: this.href };
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download .md' }));
+
+    const downloadedBlob = createObjectURL.mock.calls[0][0];
+    expect(downloadedBlob).toBeInstanceOf(Blob);
+    expect(downloadedBlob).toMatchObject({ size: new Blob([markdown]).size, type: 'text/markdown;charset=utf-8' });
+    expect(download).toEqual({ filename: 'Release notes.md', href: 'blob:markdown-source' });
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:markdown-source');
   });
 
   it('does not disclose document content for an unknown share link', () => {
