@@ -1,0 +1,776 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MarkShare — Split Desk prototype (throwaway)</title>
+<!--
+  PROTOTYPE — throwaway. Not production code.
+
+  Split Desk: app bar on top, write and preview side by side, publishing in a modal.
+  Chosen from the three-variant round; B (Paper) and C (Console) have been dropped.
+
+  This pass adds:
+    - a draggable divider between the panes (double-click the divider to reset to 50/50,
+      arrow keys nudge it when it has focus)
+    - Inter as the interface and reading typeface
+
+  No persistence, no tests, no error handling. Fake in-memory document.
+  Run: open prototype/ui/markshare-ui-prototype.html
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ---------- tokens ---------- */
+:root{
+  --paper:#faf9f6; --surface:#ffffff; --surface-2:#f3f1ec; --sunken:#efece5;
+  --ink:#232019; --ink-soft:#5d574c; --ink-faint:#8f887a;
+  --line:#e6e1d6; --line-soft:#f0ece3;
+  --accent:#3f6f5c; --accent-soft:#e4efe9; --accent-ink:#2c5344;
+  --warn:#8a5a2b; --danger:#8f3a3a;
+  --shadow:0 1px 2px rgba(35,32,25,.05), 0 8px 24px rgba(35,32,25,.06);
+  --radius:10px;
+  --sans:"Inter", ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  --mono:ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+[data-theme="dark"]{
+  --paper:#15161a; --surface:#1b1d22; --surface-2:#22252b; --sunken:#101114;
+  --ink:#e9e7e0; --ink-soft:#a9a49a; --ink-faint:#7b756b;
+  --line:#2c3038; --line-soft:#23262c;
+  --accent:#7fb79c; --accent-soft:#1f3129; --accent-ink:#a9d4c1;
+  --warn:#c69a63; --danger:#d98a8a;
+  --shadow:0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+/* the shell owns the window: every scroll happens inside a pane, never on the page,
+   so the app bar can't be pushed off the top */
+html,body{height:100%;overflow:hidden}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--sans); font-size:15px; line-height:1.5;
+  font-feature-settings:"cv05" 1, "ss03" 1; /* Inter: friendlier l, curved r */
+  -webkit-font-smoothing:antialiased;
+}
+body.is-resizing{user-select:none;cursor:col-resize}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,textarea{font:inherit;color:inherit}
+#app{height:100%}
+
+/* ---------- shared bits ---------- */
+.btn{
+  display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border-radius:8px;
+  border:1px solid var(--line);background:var(--surface);color:var(--ink);
+  font-size:13.5px;font-weight:500;white-space:nowrap;transition:background .12s,border-color .12s;
+}
+.btn:hover{background:var(--surface-2)}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+[data-theme="dark"] .btn-primary{color:#10231c}
+.btn-primary:hover{filter:brightness(1.06);background:var(--accent)}
+.btn-quiet{border-color:transparent;background:transparent;color:var(--ink-soft)}
+.btn-quiet:hover{background:var(--surface-2);color:var(--ink)}
+.btn-sm{padding:5px 9px;font-size:12.5px}
+.pill{
+  display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;
+  font-size:11.5px;font-weight:600;letter-spacing:.01em;
+  background:var(--surface-2);color:var(--ink-soft);border:1px solid var(--line-soft);
+}
+.pill-warn{background:transparent;color:var(--warn);border-color:currentColor}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--warn);display:inline-block}
+.mono{font-family:var(--mono);font-size:12.5px}
+.linkbox{
+  display:flex;align-items:center;gap:8px;padding:9px 11px;border-radius:8px;
+  background:var(--sunken);border:1px solid var(--line-soft);
+}
+.linkbox .mono{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-soft)}
+.label{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+
+/* ---------- rendered markdown ---------- */
+.md{color:var(--ink)}
+.md > :first-child{margin-top:0}
+.md-h1{font-size:1.9em;line-height:1.2;margin:0 0 .5em;letter-spacing:-.022em;font-weight:650}
+.md-h2{font-size:1.32em;line-height:1.3;margin:1.9em 0 .5em;letter-spacing:-.014em;font-weight:640}
+.md-h3{font-size:1.08em;margin:1.6em 0 .4em;font-weight:650;letter-spacing:-.006em}
+.md-h4{font-size:1em;margin:1.4em 0 .3em;color:var(--ink-soft);font-weight:650}
+.md-p{margin:0 0 1.05em}
+.md-list{margin:0 0 1.05em;padding-left:1.3em}
+.md-list li{margin:.28em 0}
+.md-task{list-style:none;margin-left:-1.3em;padding-left:1.6em;position:relative}
+.md-check{
+  position:absolute;left:0;top:.28em;width:15px;height:15px;border-radius:4px;
+  border:1.5px solid var(--line);background:var(--surface);
+}
+.md-check.is-done{background:var(--accent);border-color:var(--accent)}
+.md-check.is-done::after{
+  content:"";position:absolute;left:4px;top:1px;width:4px;height:8px;
+  border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg);
+}
+[data-theme="dark"] .md-check.is-done::after{border-color:#10231c}
+.md-a{color:var(--accent-ink);text-underline-offset:3px;text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent)}
+.md-code{
+  font-family:var(--mono);font-size:.86em;padding:.13em .38em;border-radius:5px;
+  background:var(--sunken);border:1px solid var(--line-soft);
+}
+.md-pre{
+  position:relative;margin:0 0 1.2em;padding:14px 16px;border-radius:var(--radius);overflow:auto;
+  background:var(--sunken);border:1px solid var(--line-soft);
+}
+.md-pre code{font-family:var(--mono);font-size:12.6px;line-height:1.65;color:var(--ink-soft);white-space:pre}
+.md-pre code[data-lang]:not([data-lang=""])::before{
+  content:attr(data-lang);position:absolute;top:8px;right:12px;
+  font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-faint);
+}
+.md-mermaid{
+  margin:0 0 1.2em;padding:16px;border-radius:var(--radius);
+  border:1px dashed var(--line);background:
+    repeating-linear-gradient(135deg,transparent,transparent 9px,var(--line-soft) 9px,var(--line-soft) 10px);
+}
+.md-mermaid-tag{
+  display:inline-block;margin-bottom:8px;font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--accent-ink);background:var(--accent-soft);padding:2px 7px;border-radius:5px;
+}
+.md-mermaid pre{margin:0;font-family:var(--mono);font-size:12px;color:var(--ink-soft);white-space:pre;overflow:auto}
+.md-quote{
+  margin:0 0 1.15em;padding:2px 0 2px 16px;border-left:2.5px solid var(--accent);
+  color:var(--ink-soft);font-style:italic;
+}
+.md-quote .md-p:last-child{margin-bottom:0}
+.md-hr{border:0;border-top:1px solid var(--line);margin:2em 0}
+.md-table{width:100%;border-collapse:collapse;margin:0 0 1.2em;font-size:.93em}
+.md-table th{
+  text-align:left;padding:8px 11px;border-bottom:1.5px solid var(--line);
+  font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);
+}
+.md-table td{padding:8px 11px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+.md-figure{margin:0 0 1.2em}
+.md-figure .ph{
+  height:170px;border-radius:var(--radius);border:1px solid var(--line-soft);
+  background:linear-gradient(135deg,var(--surface-2),var(--sunken));
+  display:flex;align-items:center;justify-content:center;gap:8px;color:var(--ink-faint);font-size:12.5px;
+}
+.md-figure figcaption{margin-top:7px;font-size:12.5px;color:var(--ink-faint)}
+.md-img{
+  display:inline-flex;align-items:center;gap:5px;padding:1px 7px;border-radius:5px;
+  background:var(--accent-soft);color:var(--accent-ink);font-size:.9em;
+}
+
+/* ---------- app shell ---------- */
+.app{display:flex;flex-direction:column;height:100%;min-height:100dvh;max-height:100dvh}
+.bar{
+  display:flex;align-items:center;gap:12px;padding:0 16px;height:56px;flex:none;
+  background:var(--surface);border-bottom:1px solid var(--line);
+}
+.brand{display:flex;align-items:center;gap:8px;font-weight:700;letter-spacing:-.015em}
+.mark{width:20px;height:20px;border-radius:6px;background:var(--accent);position:relative}
+.mark::after{content:"";position:absolute;inset:6px 5px;border-left:2px solid var(--paper);border-right:2px solid var(--paper)}
+.doc-title{
+  display:flex;align-items:center;gap:8px;min-width:0;margin-left:6px;padding-left:14px;
+  border-left:1px solid var(--line);
+}
+.doc-title span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:560}
+.bar-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.tabs{display:none;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--surface)}
+.seg{display:flex;background:var(--sunken);border-radius:9px;padding:3px;width:100%}
+.seg button{flex:1;padding:7px;border-radius:7px;font-size:13px;font-weight:560;color:var(--ink-soft)}
+.seg button.is-on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+
+/* ---------- panes + draggable divider ---------- */
+.panes{flex:1;display:grid;grid-template-columns:var(--split,50%) 7px 1fr;min-height:0}
+.pane{display:flex;flex-direction:column;min-width:0;min-height:0}
+.pane-head{
+  display:flex;align-items:center;gap:10px;padding:0 14px;height:40px;flex:none;
+  border-bottom:1px solid var(--line-soft);background:var(--surface);
+}
+.tools{margin-left:auto;display:flex;gap:2px}
+.tool{
+  width:26px;height:26px;border-radius:6px;display:grid;place-items:center;
+  color:var(--ink-faint);font-size:12.5px;font-family:var(--mono);
+}
+.tool:hover{background:var(--surface-2);color:var(--ink)}
+.write{flex:1;min-height:0}
+.write textarea{
+  width:100%;height:100%;resize:none;border:0;outline:none;padding:22px 24px;
+  background:var(--paper);font-family:var(--mono);font-size:13.4px;line-height:1.75;color:var(--ink);
+}
+.preview{flex:1;overflow:auto;padding:32px 40px;background:var(--surface)}
+.preview .md{max-width:62ch;margin:0 auto}
+
+.split{
+  position:relative;cursor:col-resize;background:transparent;touch-action:none;
+  padding:0;border:0;outline:none;
+}
+.split::before{ /* the divider line itself */
+  content:"";position:absolute;top:0;bottom:0;left:50%;width:1px;
+  transform:translateX(-50%);background:var(--line);transition:width .12s,background .12s;
+}
+.split::after{ /* grip at rest, so the divider reads as draggable before you hover it */
+  content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:3px;height:28px;border-radius:3px;background:var(--ink-faint);opacity:.5;transition:opacity .12s;
+}
+.split:hover::before,.split:focus-visible::before,.split.is-dragging::before{width:3px;background:var(--accent)}
+.split:hover::after,.split:focus-visible::after,.split.is-dragging::after{opacity:0}
+.split:focus-visible{box-shadow:inset 0 0 0 1px var(--accent)}
+
+.foot{
+  display:flex;align-items:center;gap:14px;padding:0 16px;height:32px;flex:none;
+  border-top:1px solid var(--line);background:var(--surface);
+  font-size:11.5px;color:var(--ink-faint);
+}
+
+/* ---------- publish modal ---------- */
+.scrim{position:fixed;inset:0;background:rgba(20,18,14,.42);display:grid;place-items:center;padding:20px;z-index:40}
+.modal{
+  width:min(520px,100%);background:var(--surface);border:1px solid var(--line);
+  border-radius:14px;box-shadow:var(--shadow);padding:24px;
+}
+.modal h2{margin:0 0 4px;font-size:19px;letter-spacing:-.018em}
+.modal p{margin:0 0 20px;color:var(--ink-soft);font-size:13.5px}
+.field{margin-bottom:16px}
+.field > .label{display:block;margin-bottom:6px}
+.modal-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:22px}
+
+/* ---------- reader surface ---------- */
+.read-bar{
+  display:flex;align-items:center;gap:12px;padding:0 20px;height:52px;flex:none;
+  background:var(--surface);border-bottom:1px solid var(--line);
+}
+.read-doc{flex:1;min-height:0;overflow:auto;padding:56px 24px 120px}
+.read-doc .md{max-width:66ch;margin:0 auto;font-size:16px}
+
+/* ---------- prototype chrome (NOT part of the design) ---------- */
+#proto-bar{
+  position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:9999;
+  display:flex;align-items:center;gap:6px;padding:5px;border-radius:999px;
+  background:#17181c;color:#f2efe8;border:1px solid #34363d;
+  box-shadow:0 6px 30px rgba(0,0,0,.4);font-family:var(--sans);
+}
+#proto-bar .tag{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:#8a8d96;padding:0 4px 0 10px;
+}
+#proto-bar .toggle{display:flex;background:#24262c;border-radius:999px;padding:2px}
+#proto-bar .toggle button{padding:4px 12px;font-size:11.5px;color:#9b9ea6;border-radius:999px}
+#proto-bar .toggle button.is-on{background:#3c3f47;color:#fff}
+#proto-bar .hint{font-size:11px;color:#8a8d96;padding:0 8px 0 2px}
+
+.lbl-short{display:none}
+
+@media (max-width:900px){
+  .panes{grid-template-columns:1fr}
+  .split{display:none}
+  .tabs{display:block}
+  .app[data-tab="write"] .pane-preview{display:none}
+  .app[data-tab="preview"] .pane-write{display:none}
+  .preview{padding:24px 20px}
+  /* the document title matters more than the wordmark on a phone */
+  .brand{font-size:0}
+  .doc-title{flex:1;margin-left:0;padding-left:0;border-left:0}
+  .bar{gap:8px;padding:0 12px}
+  .foot span:last-child{display:none}
+  #proto-bar .tag,#proto-bar .hint{display:none}
+}
+
+/* phones: shorten the bar's labels rather than let it overflow.
+   "Saved" is dropped, but the amber unsaved dot always survives */
+@media (max-width:620px){
+  .lbl-long{display:none}
+  .lbl-short{display:inline}
+  .pill-text{display:none}
+  .pill-saved{display:none}
+  .doc-title .pill{padding:3px;border-color:transparent;background:transparent}
+  .read-bar{padding:0 12px;gap:8px}
+  .read-bar .mono{display:none}
+  .read-doc{padding:32px 18px 110px}
+  .foot{gap:10px;padding:0 12px}
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="proto-bar"></div>
+
+<script type="text/plain" id="sample-md">
+# Q3 platform notes
+
+A short working document, shared with the team at one unguessable link. Nothing here is
+indexed, logged, or visible to anyone without the link.
+
+## What changed
+
+- Publishing is now **explicit** — readers only ever see saved changes
+- Pasted images are stored privately and served only through the share link
+- Optional expiry, off by default
+
+### Open questions
+
+- [x] Decide the default theme behaviour
+- [ ] Confirm the 20 images per document limit
+- [ ] Agree the wording for the "link unavailable" page
+
+## Limits
+
+| Thing | Limit | Notes |
+| --- | --- | --- |
+| Image size | 5 MB | PNG, JPEG, WebP, GIF |
+| Images per document | 20 | Counted per document |
+| Expiry | None | Author can set a local date and time |
+
+## Title rule
+
+```ts
+export function titleFrom(md: string) {
+  const first = md.split("\n").find((l) => l.startsWith("# "));
+  return first ? first.slice(2).trim() : "Untitled document";
+}
+```
+
+```mermaid
+flowchart LR
+  A[Write] --> B[Publish]
+  B --> C[Share link, read only]
+  B --> D[Edit link, private]
+```
+
+> Share links are read only. The edit link is the only way back in — treat it like a password.
+
+![Dashboard sketch](image:dashboard.png)
+
+---
+
+Readers can always take a copy with **Download .md**.
+</script>
+
+<script>
+/* =====================================================================
+   PROTOTYPE — throwaway. Fake data, no persistence, no error handling.
+   ===================================================================== */
+
+/* ---------- tiny markdown renderer (good enough to judge layout) ---------- */
+function esc(s){return s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+
+function inline(s){
+  s = esc(s);
+  s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m,alt)=>`<span class="md-img">▣ ${alt||"image"}</span>`);
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a class="md-a" href="#" onclick="return false">$1</a>');
+  s = s.replace(/`([^`]+)`/g, '<code class="md-code">$1</code>');
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
+  s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  return s;
+}
+
+function renderList(items, ordered){
+  const body = items.map(t=>{
+    const task = t.match(/^\[([ xX])\]\s+(.*)$/);
+    if(task) return `<li class="md-task"><span class="md-check${task[1]===" "?"":" is-done"}"></span>${inline(task[2])}</li>`;
+    return `<li>${inline(t)}</li>`;
+  }).join("");
+  return `<${ordered?"ol":"ul"} class="md-list">${body}</${ordered?"ol":"ul"}>`;
+}
+
+function md2html(src){
+  const lines = String(src).replace(/\r\n/g,"\n").split("\n");
+  const out = [];
+  let i = 0;
+  const FENCE = /^\s*```/;
+  while(i < lines.length){
+    const line = lines[i];
+
+    if(FENCE.test(line)){
+      const lang = line.replace(/^\s*```/,"").trim();
+      i++;
+      const buf = [];
+      while(i < lines.length && !FENCE.test(lines[i])){ buf.push(lines[i]); i++; }
+      i++;
+      if(lang === "mermaid"){
+        out.push(`<div class="md-mermaid"><span class="md-mermaid-tag">mermaid</span><pre>${esc(buf.join("\n"))}</pre></div>`);
+      } else {
+        out.push(`<pre class="md-pre"><code data-lang="${esc(lang)}">${esc(buf.join("\n"))}</code></pre>`);
+      }
+      continue;
+    }
+
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if(h){ const n = h[1].length; out.push(`<h${n} class="md-h${n}">${inline(h[2])}</h${n}>`); i++; continue; }
+
+    if(/^\s*(-{3,}|\*{3,})\s*$/.test(line)){ out.push('<hr class="md-hr">'); i++; continue; }
+
+    if(/^>\s?/.test(line)){
+      const buf = [];
+      while(i < lines.length && /^>\s?/.test(lines[i])){ buf.push(lines[i].replace(/^>\s?/,"")); i++; }
+      out.push(`<blockquote class="md-quote">${md2html(buf.join("\n"))}</blockquote>`);
+      continue;
+    }
+
+    if(/\|/.test(line) && i+1 < lines.length && /^\s*\|?[\s:|-]*-[\s:|-]*$/.test(lines[i+1])){
+      const cells = r => r.trim().replace(/^\||\|$/g,"").split("|").map(c=>c.trim());
+      const head = cells(line);
+      i += 2;
+      const rows = [];
+      while(i < lines.length && /\|/.test(lines[i]) && lines[i].trim() !== ""){ rows.push(cells(lines[i])); i++; }
+      out.push(
+        `<table class="md-table"><thead><tr>${head.map(c=>`<th>${inline(c)}</th>`).join("")}</tr></thead>` +
+        `<tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+      );
+      continue;
+    }
+
+    if(/^\s*([-*+]|\d+\.)\s+/.test(line)){
+      const ordered = /^\s*\d+\./.test(line);
+      const items = [];
+      while(i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])){
+        items.push(lines[i].replace(/^\s*([-*+]|\d+\.)\s+/,""));
+        i++;
+      }
+      out.push(renderList(items, ordered));
+      continue;
+    }
+
+    if(/^\s*$/.test(line)){ i++; continue; }
+
+    const buf = [];
+    while(i < lines.length && !/^\s*$/.test(lines[i]) &&
+          !/^(#{1,4}\s|\s*```|>|\s*([-*+]|\d+\.)\s)/.test(lines[i])){ buf.push(lines[i]); i++; }
+    const para = buf.join(" ");
+    const solo = para.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+    if(solo){
+      out.push(`<figure class="md-figure"><div class="ph">▣ ${esc(solo[2].replace(/^image:/,""))}</div><figcaption>${esc(solo[1])}</figcaption></figure>`);
+    } else {
+      out.push(`<p class="md-p">${inline(para)}</p>`);
+    }
+  }
+  return out.join("\n");
+}
+
+/* ---------- fake document state ---------- */
+const SAMPLE = document.getElementById("sample-md").textContent.trim();
+const params = new URLSearchParams(location.search);
+
+const DEFAULT_SPLIT = 50;
+const MIN_SPLIT = 22;
+const MAX_SPLIT = 78;
+
+const state = {
+  surface: params.get("surface") === "reader" ? "reader" : "author",
+  theme: "system",
+  md: SAMPLE,
+  savedMd: SAMPLE,
+  shareUrl: "markshare.app/d/7fq2-k9vm-p3xa",
+  editUrl: "markshare.app/e/9c1b-2z7d-l0mn",
+  expiry: null,
+  images: [{name:"dashboard.png", size:"412 KB"},{name:"flow-v2.png", size:"188 KB"}],
+  split: DEFAULT_SPLIT,   // % of the pane row given to Write
+  tab: "write",           // narrow screens only
+  publishOpen: false,
+  toast: null,
+};
+
+const dirty = () => state.md !== state.savedMd;
+const title = () => {
+  const first = state.md.split("\n").find(l => l.startsWith("# "));
+  return first ? first.slice(2).trim() : "Untitled document";
+};
+const words = () => (state.md.trim() ? state.md.trim().split(/\s+/).length : 0);
+
+/* sets the message only — callers render, so an action fired while an earlier
+   toast is still up still redraws the page */
+function toast(msg){
+  state.toast = msg;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(()=>{ state.toast = null; render(); }, 1900);
+}
+
+/* ---------- actions ---------- */
+const actions = {
+  save(){ state.savedMd = state.md; toast("Changes saved — the share link now shows this version"); },
+  publish(){ state.publishOpen = true; },
+  closePublish(){ state.publishOpen = false; },
+  copyShare(){ toast("Share link copied"); },
+  copyEdit(){ toast("Edit link copied — keep it private"); },
+  download(){ toast("Downloading " + title().toLowerCase().replace(/\s+/g,"-") + ".md"); },
+  del(){ toast("Document deleted (prototype — nothing really happened)"); },
+  expiry(){ state.expiry = state.expiry ? null : "14 Aug 2026, 18:00"; toast(state.expiry ? "Expires " + state.expiry : "Expiry removed"); },
+  image(){ toast("Pasted image stored privately (" + (state.images.length+1) + "/20)"); },
+  theme(){
+    const order = ["system","light","dark"];
+    state.theme = order[(order.indexOf(state.theme)+1) % order.length];
+    applyTheme();
+    toast("Theme: " + state.theme);
+  },
+  tab(v){ state.tab = v; },
+  resetSplit(){ state.split = DEFAULT_SPLIT; toast("Split reset to 50/50"); },
+  surface(v){ state.surface = v; syncUrl(); },
+};
+
+function applyTheme(){
+  const sysDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme =
+    state.theme === "system" ? (sysDark ? "dark" : "light") : state.theme;
+}
+const themeGlyph = () => state.theme === "system" ? "◐" : state.theme === "dark" ? "☾" : "☀";
+
+function syncUrl(){
+  const p = new URLSearchParams();
+  if(state.surface === "reader") p.set("surface","reader");
+  const q = p.toString();
+  // some browsers refuse history writes on file:// — the prototype still works without it
+  try { history.replaceState(null, "", location.pathname + (q ? "?" + q : "")); } catch (e) {}
+}
+
+const savedPill = () => dirty()
+  ? `<span class="pill pill-warn"><span class="dot"></span><span class="pill-text">Unsaved changes</span></span>`
+  : `<span class="pill pill-saved"><span class="pill-text">Saved</span></span>`;
+
+const expiryLine = () => state.expiry ? `Expires ${state.expiry}` : "Never expires";
+
+/* ---------- views ---------- */
+function authorView(){
+  return `
+    <div class="app" data-tab="${state.tab}">
+      <div class="bar">
+        <div class="brand"><span class="mark"></span> MarkShare</div>
+        <div class="doc-title">
+          <span>${esc(title())}</span>
+          ${savedPill()}
+        </div>
+        <div class="bar-right">
+          <button class="btn btn-quiet btn-sm" data-act="theme" title="Theme">${themeGlyph()}</button>
+          <button class="btn" data-act="publish" title="Share">
+            <span class="lbl-long">Share</span><span class="lbl-short">↗</span>
+          </button>
+          <button class="btn btn-primary" data-act="save"${dirty()?"":" disabled style=opacity:.5"}>
+            <span class="lbl-long">Save changes</span><span class="lbl-short">Save</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <div class="seg">
+          <button class="${state.tab==="write"?"is-on":""}" data-act="tab" data-arg="write">Edit</button>
+          <button class="${state.tab==="preview"?"is-on":""}" data-act="tab" data-arg="preview">Preview</button>
+        </div>
+      </div>
+
+      <div class="panes" data-panes style="--split:${state.split}%">
+        <div class="pane pane-write">
+          <div class="pane-head">
+            <span class="label">Write</span>
+            <div class="tools">
+              <button class="tool" title="Bold"><b>B</b></button>
+              <button class="tool" title="Italic"><i>I</i></button>
+              <button class="tool" title="Heading">H</button>
+              <button class="tool" title="Link">↗</button>
+              <button class="tool" title="Code">&lt;&gt;</button>
+              <button class="tool" title="Paste image" data-act="image">▣</button>
+            </div>
+          </div>
+          <div class="write"><textarea data-md spellcheck="false">${esc(state.md)}</textarea></div>
+        </div>
+
+        <div class="split" data-splitter tabindex="0" role="separator"
+             aria-orientation="vertical" aria-label="Resize the write and preview panes"
+             aria-valuenow="${Math.round(state.split)}" aria-valuemin="${MIN_SPLIT}" aria-valuemax="${MAX_SPLIT}"
+             title="Drag to resize · double-click to reset"></div>
+
+        <div class="pane pane-preview">
+          <div class="pane-head">
+            <span class="label">Preview</span>
+            <span class="mono" style="margin-left:auto;color:var(--ink-faint)">${dirty()?"not yet published":"matches share link"}</span>
+          </div>
+          <div class="preview"><div class="md" data-preview>${md2html(state.md)}</div></div>
+        </div>
+      </div>
+
+      <div class="foot">
+        <span data-words>${words()} words</span>
+        <span>${state.images.length}/20 images</span>
+        <span>${expiryLine()}</span>
+        <span style="margin-left:auto" class="mono">${esc(state.shareUrl)}</span>
+      </div>
+
+      ${state.publishOpen ? publishModal() : ""}
+    </div>`;
+}
+
+function publishModal(){
+  return `
+    <div class="scrim" data-act="closePublish">
+      <div class="modal" data-stop>
+        <h2>Your document is live</h2>
+        <p>Anyone with the share link can read it. No one can change it.</p>
+        <div class="field">
+          <span class="label">Share link — read only</span>
+          <div class="linkbox">
+            <span class="mono">${esc(state.shareUrl)}</span>
+            <button class="btn btn-sm" data-act="copyShare">Copy</button>
+          </div>
+        </div>
+        <div class="field">
+          <span class="label">Edit link — private, keep it safe</span>
+          <div class="linkbox">
+            <span class="mono">${esc(state.editUrl)}</span>
+            <button class="btn btn-sm" data-act="copyEdit">Copy</button>
+          </div>
+        </div>
+        <div class="field">
+          <span class="label">Expiry</span>
+          <div class="row">
+            <span>${expiryLine()}</span>
+            <button class="btn btn-sm" data-act="expiry">${state.expiry?"Remove":"Set expiry"}</button>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-quiet" data-act="del" style="color:var(--danger)">Delete document</button>
+          <button class="btn btn-primary" data-act="closePublish">Done</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function readerView(){
+  return `
+    <div class="app">
+      <div class="read-bar">
+        <div class="brand"><span class="mark"></span></div>
+        <strong style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(title())}</strong>
+        <span class="pill">Read only</span>
+        <div class="bar-right">
+          <span class="mono" style="color:var(--ink-faint)">${expiryLine()}</span>
+          <button class="btn btn-sm" data-act="download">Download .md</button>
+          <button class="btn btn-quiet btn-sm" data-act="theme">${themeGlyph()}</button>
+        </div>
+      </div>
+      <div class="read-doc"><div class="md">${md2html(state.savedMd)}</div></div>
+    </div>`;
+}
+
+/* ---------- render ---------- */
+const app = document.getElementById("app");
+let lastDirty = false;
+
+function render(){
+  lastDirty = dirty();
+  const prevScroll = app.querySelector(".preview")?.scrollTop || 0;
+  const ta0 = app.querySelector("[data-md]");
+  const sel = ta0
+    ? { start: ta0.selectionStart, end: ta0.selectionEnd, focused: document.activeElement === ta0, top: ta0.scrollTop }
+    : null;
+  const splitHadFocus = document.activeElement?.hasAttribute?.("data-splitter");
+
+  app.innerHTML = state.surface === "reader" ? readerView() : authorView();
+
+  const prev = app.querySelector(".preview");
+  if(prev) prev.scrollTop = prevScroll;
+  const ta = app.querySelector("[data-md]");
+  if(ta && sel && sel.focused){ ta.focus(); ta.setSelectionRange(sel.start, sel.end); ta.scrollTop = sel.top; }
+  if(splitHadFocus) app.querySelector("[data-splitter]")?.focus();
+
+  if(state.toast){
+    const t = document.createElement("div");
+    t.textContent = state.toast;
+    t.style.cssText = "position:fixed;left:50%;bottom:74px;transform:translateX(-50%);z-index:9998;" +
+      "background:var(--ink);color:var(--paper);padding:9px 15px;border-radius:999px;font-size:13px;box-shadow:var(--shadow)";
+    app.appendChild(t);
+  }
+  renderBar();
+}
+
+/* typing updates only the bits that depend on the text, so the caret stays put */
+app.addEventListener("input", e => {
+  if(!e.target.matches("[data-md]")) return;
+  state.md = e.target.value;
+  // crossing the saved/unsaved line changes chrome all over the page — redraw once
+  if(dirty() !== lastDirty){ render(); return; }
+  const prev = app.querySelector("[data-preview]");
+  if(prev) prev.innerHTML = md2html(state.md);
+  app.querySelectorAll("[data-words]").forEach(el => { el.textContent = `${words()} words`; });
+});
+
+app.addEventListener("click", e => {
+  const hit = e.target.closest("[data-act]");
+  if(!hit) return;
+  // a click inside the modal card must not reach the scrim's close action
+  const stop = e.target.closest("[data-stop]");
+  if(stop && !stop.contains(hit)) return;
+
+  const fn = actions[hit.dataset.act];
+  if(!fn) return;
+  fn(hit.dataset.arg);
+  render();
+});
+
+/* ---------- the draggable divider ---------- */
+function setSplit(pct){
+  state.split = Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, pct));
+  const panes = app.querySelector("[data-panes]");
+  const grip = app.querySelector("[data-splitter]");
+  if(panes) panes.style.setProperty("--split", state.split + "%");
+  if(grip) grip.setAttribute("aria-valuenow", Math.round(state.split));
+}
+
+app.addEventListener("pointerdown", e => {
+  const grip = e.target.closest("[data-splitter]");
+  if(!grip) return;
+  const panes = app.querySelector("[data-panes]");
+  if(!panes) return;
+
+  e.preventDefault();
+  try { grip.setPointerCapture(e.pointerId); } catch (err) {}
+  grip.classList.add("is-dragging");
+  document.body.classList.add("is-resizing");
+
+  const rect = panes.getBoundingClientRect();
+  const move = ev => setSplit((ev.clientX - rect.left) / rect.width * 100);
+  const up = () => {
+    grip.classList.remove("is-dragging");
+    document.body.classList.remove("is-resizing");
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+});
+
+app.addEventListener("dblclick", e => {
+  if(e.target.closest("[data-splitter]")){ actions.resetSplit(); render(); }
+});
+
+app.addEventListener("keydown", e => {
+  const grip = e.target.closest?.("[data-splitter]");
+  if(!grip) return;
+  const step = e.shiftKey ? 10 : 2;
+  if(e.key === "ArrowLeft"){ e.preventDefault(); setSplit(state.split - step); }
+  if(e.key === "ArrowRight"){ e.preventDefault(); setSplit(state.split + step); }
+  if(e.key === "Home" || e.key === "Enter" || e.key === " "){ e.preventDefault(); setSplit(DEFAULT_SPLIT); }
+});
+
+document.addEventListener("keydown", e => {
+  if((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s"){ e.preventDefault(); actions.save(); render(); return; }
+  if(e.key === "Escape" && state.publishOpen){ state.publishOpen = false; render(); }
+});
+
+/* ---------- prototype chrome (not part of the design) ---------- */
+const bar = document.getElementById("proto-bar");
+function renderBar(){
+  bar.innerHTML = `
+    <span class="tag">prototype</span>
+    <div class="toggle">
+      <button data-surface="author" class="${state.surface==="author"?"is-on":""}">Author</button>
+      <button data-surface="reader" class="${state.surface==="reader"?"is-on":""}">Reader</button>
+    </div>
+    ${state.surface === "author" ? `<span class="hint">drag the divider · double-click to reset</span>` : ""}`;
+}
+bar.addEventListener("click", e => {
+  const b = e.target.closest("button");
+  if(b && b.dataset.surface){ actions.surface(b.dataset.surface); render(); }
+});
+
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+
+applyTheme();
+syncUrl();
+render();
+</script>
+</body>
+</html>
