@@ -5,10 +5,11 @@ const mermaidApi = vi.hoisted(() => ({
   initialize: vi.fn(),
   render: vi.fn(async (_id: string, source: string) => {
     if (source.includes('not a diagram')) throw new Error('invalid diagram');
-    if (source.includes('unsafe output')) return { svg: '<svg role="img" onload="alert(1)"><script>alert(1)</script><a href="javascript:alert(1)">Bad</a></svg>' };
+    if (source.includes('unsafe output')) return { svg: '<svg role="img" viewBox="0 0 100 100" onload="alert(1)"><script>alert(1)</script><a href="javascript:alert(1)">Bad</a></svg>' };
+    if (source.includes('malformed geometry')) return { svg: '<svg role="img" viewBox="0 0 0 200"></svg>' };
     if (source.includes('sized diagram')) return { svg: '<svg role="img" viewBox="0 0 1200 300"></svg>' };
     if (source.includes('replacement diagram')) return { svg: '<svg role="img" viewBox="0 0 400 100"></svg>' };
-    return { svg: '<svg role="img" aria-label="Rendered Mermaid diagram"></svg>' };
+    return { svg: '<svg role="img" aria-label="Rendered Mermaid diagram" viewBox="0 0 100 100"></svg>' };
   }),
 }));
 
@@ -123,6 +124,13 @@ describe('Markdown interpretation', () => {
     render(<MarkdownView document={interpretMarkdown('```mermaid\nnot a diagram\n```')} />);
     expect(await screen.findByText('This diagram could not be rendered safely.')).toBeInTheDocument();
     expect(screen.getByText('not a diagram')).toBeInTheDocument();
+  });
+
+  it('falls back safely when sanitized Mermaid output has no usable geometry', async () => {
+    render(<MarkdownView document={interpretMarkdown('```mermaid\nmalformed geometry\n```')} />);
+
+    expect(await screen.findByText('This diagram could not be rendered safely.')).toBeInTheDocument();
+    expect(screen.getByText('malformed geometry')).toBeInTheDocument();
   });
 
   it('rejects interactive Mermaid input and sanitizes renderer output', async () => {
@@ -260,7 +268,8 @@ describe('Markdown interpretation', () => {
       svg: expect.stringContaining('viewBox="0 0 1200 300"'),
     }));
 
-    rendered.rerender(<div className="preview"><article className="markdown"><MarkdownView document={document} onMermaidExpand={onMermaidExpand} mermaidViewerOpen /></article></div>);
+    const openedDiagram = onMermaidExpand.mock.calls[0]?.[0];
+    rendered.rerender(<div className="preview"><article className="markdown"><MarkdownView document={document} onMermaidExpand={onMermaidExpand} openMermaidId={openedDiagram.id} /></article></div>);
     expect(screen.queryByRole('img', { name: 'Mermaid diagram' })).toBeNull();
     expect(rendered.container.querySelector('.mermaid-diagram__viewport svg')).toBeNull();
   });
@@ -271,5 +280,20 @@ describe('Markdown interpretation', () => {
 
     expect(await screen.findByRole('img', { name: 'Mermaid diagram' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open Mermaid diagram in expanded view' })).toBeNull();
+  });
+
+  it('keeps unrelated diagrams rendered while one is open in the viewer', async () => {
+    widthFor = (element) => element.classList.contains('markdown') ? 600 : 1000;
+    const onMermaidExpand = vi.fn();
+    const document = interpretMarkdown('```mermaid\nsized diagram\n```\n\n```mermaid\nsized diagram\n```');
+    const rendered = render(<div className="preview"><article className="markdown"><MarkdownView document={document} onMermaidExpand={onMermaidExpand} /></article></div>);
+
+    const expandControls = await screen.findAllByRole('button', { name: 'Open Mermaid diagram in expanded view' });
+    fireEvent.click(expandControls[0]!);
+    const openedDiagram = onMermaidExpand.mock.calls[0]?.[0];
+    rendered.rerender(<div className="preview"><article className="markdown"><MarkdownView document={document} onMermaidExpand={onMermaidExpand} openMermaidId={openedDiagram.id} /></article></div>);
+
+    expect(screen.getAllByRole('img', { name: 'Mermaid diagram' })).toHaveLength(1);
+    expect(rendered.container.querySelectorAll('.mermaid-diagram__viewport svg')).toHaveLength(1);
   });
 });

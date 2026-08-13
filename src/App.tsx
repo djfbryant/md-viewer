@@ -29,7 +29,7 @@ function RenderedDocument({ document }: { document: InterpretedMarkdown }) {
   return <>
     <MarkdownView
       document={document}
-      mermaidViewerOpen={expandedMermaid !== null}
+      openMermaidId={expandedMermaid?.id}
       onMermaidExpand={setExpandedMermaid}
     />
     {expandedMermaid && <MermaidViewer

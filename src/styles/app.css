@@ -86,7 +86,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .mermaid-diagram__expand svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.35; }
 .mermaid-diagram__expand::after { position: absolute; z-index: 1; right: 0; bottom: calc(100% + var(--space-2)); width: max-content; max-width: 180px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); background: var(--ink); color: var(--paper); content: attr(data-tooltip); font-size: var(--type-small-size); line-height: 1.2; opacity: 0; pointer-events: none; transform: translateY(2px); transition: opacity .12s, transform .12s; }
 .mermaid-diagram__expand:hover::after, .mermaid-diagram__expand:focus-visible::after { opacity: 1; transform: translateY(0); }
-.mermaid-diagram__scroll-shell { position: relative; overflow: hidden; }
+.mermaid-diagram__scroll-shell { position: relative; overflow: hidden; padding: var(--space-3); }
 .mermaid-diagram__scroll-shell::before, .mermaid-diagram__scroll-shell::after { position: absolute; z-index: 1; top: 0; bottom: 0; width: 28px; content: ''; opacity: 0; pointer-events: none; transition: opacity .12s; }
 .mermaid-diagram__scroll-shell::before { left: 0; background: linear-gradient(90deg, var(--surface), transparent); }
 .mermaid-diagram__scroll-shell::after { right: 0; background: linear-gradient(270deg, var(--surface), transparent); }

@@ -116,6 +116,8 @@ export type MermaidSizingDecision = {
 };
 
 export type MermaidExpandRequest = {
+  /** Stable presentation ID; lets only the opened diagram yield its live SVG. */
+  id: string;
   /** Original Mermaid source, suitable for an editor or source-view panel. */
   source: string;
   /** Sanitized rendered SVG, suitable for an expanded visual viewer. */
@@ -130,10 +132,10 @@ type MermaidOverflowCue = 'none' | 'start' | 'end' | 'both';
 
 type MermaidPresentation = {
   onExpand?: MermaidExpandHandler;
-  viewerOpen: boolean;
+  openMermaidId?: string;
 };
 
-const MermaidExpandContext = createContext<MermaidPresentation>({ viewerOpen: false });
+const MermaidExpandContext = createContext<MermaidPresentation>({});
 
 export const MERMAID_MINIMUM_SCALE = 0.875;
 
@@ -219,7 +221,7 @@ function normalizeMermaidSvg(svg: string) {
   const container = window.document.createElement('div');
   container.innerHTML = svg;
   const renderedSvg = container.querySelector('svg');
-  if (renderedSvg instanceof SVGSVGElement) parseSvgGeometry(renderedSvg);
+  if (!(renderedSvg instanceof SVGSVGElement) || !parseSvgGeometry(renderedSvg)) return null;
   return container.innerHTML;
 }
 
@@ -246,7 +248,8 @@ function sameSizingDecision(left: MermaidSizingDecision | null, right: MermaidSi
 
 function MermaidDiagram({ source }: { source: string }) {
   const reactId = useId();
-  const { onExpand: onMermaidExpand, viewerOpen } = useContext(MermaidExpandContext);
+  const { onExpand: onMermaidExpand, openMermaidId } = useContext(MermaidExpandContext);
+  const viewerOpen = openMermaidId === reactId;
   const [state, setState] = useState<MermaidState>({ kind: 'loading' });
   const [sizing, setSizing] = useState<MermaidSizingDecision | null>(null);
   const [overflowCue, setOverflowCue] = useState<MermaidOverflowCue>('none');
@@ -269,7 +272,8 @@ function MermaidDiagram({ source }: { source: string }) {
       .then((mermaid) => mermaid.render(`markshare-mermaid-${reactId.replace(/[^a-zA-Z0-9_-]/g, '')}`, source))
       .then(({ svg }) => {
         const sanitizedSvg = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
-        if (active) setState({ kind: 'rendered', svg: normalizeMermaidSvg(sanitizedSvg) });
+        const normalizedSvg = normalizeMermaidSvg(sanitizedSvg);
+        if (active) setState(normalizedSvg ? { kind: 'rendered', svg: normalizedSvg } : { kind: 'invalid' });
       })
       .catch(() => {
         if (active) setState({ kind: 'invalid' });
@@ -347,7 +351,7 @@ function MermaidDiagram({ source }: { source: string }) {
       data-tooltip="Open expanded view"
       title="Open expanded view"
       ref={expandButtonRef}
-      onClick={() => onMermaidExpand({ source, svg: state.svg, returnFocusRef: expandButtonRef })}
+      onClick={() => onMermaidExpand({ id: reactId, source, svg: state.svg, returnFocusRef: expandButtonRef })}
     >
       <svg aria-hidden="true" viewBox="0 0 16 16" focusable="false">
         <path d="M6.25 2.5H2.5v3.75M2.75 2.75l4 4M9.75 2.5h3.75v3.75M13.25 2.75l-4 4M6.25 13.5H2.5V9.75M2.75 13.25l4-4M9.75 13.5h3.75V9.75M13.25 13.25l-4-4" />
@@ -457,16 +461,16 @@ export function downloadMarkdown(document: InterpretedMarkdown) {
 export function MarkdownView({
   document,
   onMermaidExpand,
-  mermaidViewerOpen = false,
+  openMermaidId,
 }: {
   document: InterpretedMarkdown;
   /** Connect this to a viewer/dialog if expanded diagrams should be available. */
   onMermaidExpand?: MermaidExpandHandler;
   /**
-   * Set while the parent renders an expanded Mermaid viewer. This removes the
-   * inline SVG DOM so Mermaid's IDs are never duplicated in the document.
+   * Set to the opened diagram's ID while the parent renders its expanded
+   * viewer. Only that inline SVG is removed, so other diagrams remain intact.
    */
-  mermaidViewerOpen?: boolean;
+  openMermaidId?: string;
 }) {
-  return <MermaidExpandContext.Provider value={{ onExpand: onMermaidExpand, viewerOpen: mermaidViewerOpen }}>{document.content}</MermaidExpandContext.Provider>;
+  return <MermaidExpandContext.Provider value={{ onExpand: onMermaidExpand, openMermaidId }}>{document.content}</MermaidExpandContext.Provider>;
 }
