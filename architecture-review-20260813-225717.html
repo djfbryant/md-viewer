@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture review — MarkShare</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose", flowchart: { curve: "basis" } });
+    </script>
+    <style>
+      :root { color-scheme: light; }
+      html { scroll-behavior: smooth; }
+      body { background-image: radial-gradient(circle at 8% 2%, rgba(16,185,129,.08), transparent 27rem); }
+      .seam-line { border-top: 2px dashed #94a3b8; }
+      .deep { background: linear-gradient(145deg, #0f172a, #1e293b); }
+      .module-shadow { box-shadow: 0 16px 45px -28px rgba(15,23,42,.35); }
+      .leak-arrow { color: #dc2626; }
+      .mass-interface { background: #fef2f2; border-color: #fca5a5; }
+      .mass-implementation { background: #f8fafc; border-color: #cbd5e1; }
+      .deep-interface { background: #d1fae5; border-color: #6ee7b7; }
+      .diagram-grid { background-image: linear-gradient(#e2e8f0 1px, transparent 1px), linear-gradient(90deg,#e2e8f0 1px,transparent 1px); background-size: 22px 22px; }
+      @media print { .break-inside-avoid { break-inside: avoid; } }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 antialiased">
+    <main class="mx-auto max-w-6xl space-y-12 px-5 py-12 sm:px-8 lg:px-10">
+      <header class="flex flex-col gap-6 border-b border-slate-300 pb-8 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p class="mb-2 text-xs font-semibold uppercase tracking-[.22em] text-emerald-700">Architecture review · 13 August 2026</p>
+          <h1 class="font-serif text-4xl tracking-tight sm:text-5xl">MarkShare</h1>
+        </div>
+        <div class="grid grid-cols-2 gap-x-5 gap-y-2 text-xs text-slate-600 sm:grid-cols-4">
+          <span class="flex items-center gap-2"><i class="h-4 w-6 rounded border border-slate-500 bg-white"></i>module</span>
+          <span class="flex items-center gap-2"><i class="w-7 border-t-2 border-dashed border-slate-400"></i>seam</span>
+          <span class="flex items-center gap-2"><b class="leak-arrow text-base">→</b>leakage</span>
+          <span class="flex items-center gap-2"><i class="deep h-4 w-6 rounded"></i>deep module</span>
+        </div>
+      </header>
+
+      <section id="candidates" class="space-y-12">
+        <article id="document-lifecycle" class="break-inside-avoid overflow-hidden rounded-2xl border border-slate-200 bg-white module-shadow">
+          <div class="border-b border-slate-200 p-6 sm:p-8">
+            <div class="mb-4 flex flex-wrap gap-2">
+              <span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-800">Strong</span>
+              <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">mock · true external</span>
+              <span class="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">Top recommendation</span>
+            </div>
+            <h2 class="font-serif text-3xl tracking-tight">Deepen the Document lifecycle</h2>
+            <p class="mt-4 font-mono text-xs leading-6 text-slate-500">src/App.tsx:96–118, 157–183 · src/lib/instant.ts · instant.schema.ts · instant.perms.ts · src/AppDocument.test.tsx:4–29</p>
+          </div>
+
+          <div class="grid gap-px bg-slate-200 lg:grid-cols-2">
+            <figure class="bg-stone-50 p-5 sm:p-7">
+              <figcaption class="mb-3 text-xs font-bold uppercase tracking-widest text-red-700">Before · third-party implementation leaks</figcaption>
+              <div class="min-h-[300px] rounded-xl border border-slate-200 bg-white p-3">
+                <pre class="mermaid">
+flowchart TB
+  E[Editor] -->|ID + title + timestamps| TX[Instant transaction DSL]
+  R[Reader] -->|query + ruleParams| Q[Instant query DSL]
+  T[Test] -->|Proxy recreation| TX
+  T -->|query recreation| Q
+  TX --> DB[(InstantDB)]
+  Q --> DB
+  P[Permission rules] -. knowledge .-> E
+  P -. knowledge .-> R
+  classDef leak fill:#fef2f2,stroke:#dc2626,stroke-width:2px,color:#991b1b;
+  class TX,Q,P leak;
+                </pre>
+              </div>
+            </figure>
+            <figure class="bg-stone-50 p-5 sm:p-7">
+              <figcaption class="mb-3 text-xs font-bold uppercase tracking-widest text-emerald-700">After · capability rules become local</figcaption>
+              <div class="relative min-h-[300px] overflow-hidden rounded-xl border border-slate-300 bg-white p-5 diagram-grid">
+                <div class="mx-auto flex max-w-md justify-around text-center text-xs font-bold uppercase tracking-wider text-slate-600">
+                  <span class="rounded border border-slate-400 bg-white px-4 py-2">Editor</span>
+                  <span class="rounded border border-slate-400 bg-white px-4 py-2">Reader</span>
+                  <span class="rounded border border-slate-400 bg-white px-4 py-2">Tests</span>
+                </div>
+                <div class="mx-auto mt-5 w-4/5 seam-line pt-2 text-center text-[10px] font-bold uppercase tracking-widest text-slate-500">small interface at one seam</div>
+                <div class="deep mx-auto mt-3 w-11/12 rounded-xl border-4 border-slate-800 p-5 text-white shadow-xl">
+                  <div class="text-center text-xs font-bold uppercase tracking-[.18em]">Document lifecycle module</div>
+                  <div class="mt-5 grid grid-cols-3 gap-2 text-center text-[10px] text-slate-300">
+                    <span class="rounded bg-white/10 p-2">capabilities</span><span class="rounded bg-white/10 p-2">timestamps</span><span class="rounded bg-white/10 p-2">outcomes</span>
+                  </div>
+                  <div class="mt-3 text-center text-[10px] text-slate-400">Instant adapter in production · mock adapter in tests</div>
+                </div>
+              </div>
+            </figure>
+          </div>
+
+          <div class="grid gap-7 p-6 sm:p-8 md:grid-cols-[1fr_1fr_.8fr]">
+            <div><h3 class="text-xs font-bold uppercase tracking-widest text-slate-500">Problem</h3><p class="mt-2 text-sm leading-6">The current database module is shallow: Editor, Reader, and tests must learn transaction shape, query shape, permission parameters, timestamps, and failure meaning.</p></div>
+            <div><h3 class="text-xs font-bold uppercase tracking-widest text-slate-500">Solution</h3><p class="mt-2 text-sm leading-6">Concentrate publication, reading, capability enforcement, and lifecycle outcome translation in one deep Document lifecycle module; keep InstantDB behind the true external seam.</p></div>
+            <div><h3 class="text-xs font-bold uppercase tracking-widest text-slate-500">Benefits</h3><ul class="mt-2 space-y-2 text-sm"><li>• locality: permission bugs concentrate</li><li>• leverage: future flows reuse rules</li><li>• tests hit one interface</li><li>• mock adapter replaces DSL imitation</li></ul></div>
+          </div>
+          <div class="mx-6 mb-7 rounded-lg border-l-4 border-emerald-500 bg-emerald-50 px-4 py-3 text-sm text-emerald-950 sm:mx-8"><strong>Deletion test:</strong> deleting <code>src/lib/instant.ts</code> only moves two lines; deleting the deep module would spread lifecycle rules across Edit Links, images, expiry, deletion, Editor, and Reader.</div>
+        </article>
+
+        <article id="markdown-interpretation" class="break-inside-avoid overflow-hidden rounded-2xl border border-slate-200 bg-white module-shadow">
+          <div class="border-b border-slate-200 p-6 sm:p-8">
+            <div class="mb-4 flex flex-wrap gap-2"><span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-800">Strong</span><span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">in-process</span></div>
+            <h2 class="font-serif text-3xl tracking-tight">Deepen Markdown interpretation</h2>
+            <p class="mt-4 font-mono text-xs leading-6 text-slate-500">src/document.ts:3–5 · src/App.tsx:107, 147, 150, 166–167 · src/styles/app.css:59–66 · src/document.test.ts</p>
+          </div>
+
+          <div class="grid gap-px bg-slate-200 lg:grid-cols-2">
+            <figure class="bg-stone-50 p-5 sm:p-7">
+              <figcaption class="mb-3 text-xs font-bold uppercase tracking-widest text-red-700">Before · one concept, five places</figcaption>
+              <div class="relative min-h-[300px] rounded-xl border border-slate-200 bg-white p-5">
+                <div class="grid h-full grid-cols-2 gap-3 text-center text-[11px] font-semibold text-slate-700">
+                  <div class="rounded-lg border border-red-300 bg-red-50 p-4">title helper<br><span class="text-red-500">src/document.ts</span></div>
+                  <div class="rounded-lg border border-red-300 bg-red-50 p-4">word count<br><span class="text-red-500">Editor</span></div>
+                  <div class="rounded-lg border border-red-300 bg-red-50 p-4">Preview render<br><span class="text-red-500">JSX call site</span></div>
+                  <div class="rounded-lg border border-red-300 bg-red-50 p-4">Reader render<br><span class="text-red-500">JSX call site</span></div>
+                  <div class="col-span-2 rounded-lg border border-red-300 bg-red-50 p-4">rendered Document rules<br><span class="text-red-500">CSS + incidental tests</span></div>
+                </div>
+                <div class="mt-3 text-center text-xs font-semibold text-red-700">“Preview matches share link” is an unenforced invariant</div>
+              </div>
+            </figure>
+            <figure class="bg-stone-50 p-5 sm:p-7">
+              <figcaption class="mb-3 text-xs font-bold uppercase tracking-widest text-emerald-700">After · interpretation policy has depth</figcaption>
+              <div class="min-h-[300px] rounded-xl border border-slate-300 bg-white p-5 diagram-grid">
+                <div class="mx-auto flex max-w-sm justify-around text-[11px] font-semibold"><span class="rounded border bg-white px-4 py-2">Preview</span><span class="rounded border bg-white px-4 py-2">Reader</span><span class="rounded border bg-white px-4 py-2">Download</span></div>
+                <div class="mx-auto mt-5 w-4/5 seam-line pt-2 text-center text-[10px] font-bold uppercase tracking-widest text-slate-500">shared interface</div>
+                <div class="deep mx-auto mt-3 w-10/12 rounded-xl border-4 border-slate-800 px-6 py-5 text-white">
+                  <div class="text-center text-xs font-bold uppercase tracking-[.18em]">Markdown interpretation module</div>
+                  <div class="mt-4 grid grid-cols-2 gap-2 text-center text-[10px] text-slate-300"><span class="rounded bg-white/10 p-2">safe syntax</span><span class="rounded bg-white/10 p-2">metadata</span><span class="rounded bg-white/10 p-2">Mermaid policy</span><span class="rounded bg-white/10 p-2">source behaviour</span></div>
+                </div>
+              </div>
+            </figure>
+          </div>
+
+          <div class="grid gap-7 p-6 sm:p-8 md:grid-cols-[1fr_1fr_.8fr]">
+            <div><h3 class="text-xs font-bold uppercase tracking-widest text-slate-500">Problem</h3><p class="mt-2 text-sm leading-6">Understanding one Document requires bouncing between a shallow helper, two render call sites, inline metadata, styling, and end-to-end tests.</p></div>
+            <div><h3 class="text-xs font-bold uppercase tracking-widest text-slate-500">Solution</h3><p class="mt-2 text-sm leading-6">Concentrate safe rendering policy, title and metadata derivation, shared Reader presentation, and source behaviour in one deep in-process module.</p></div>
+            <div><h3 class="text-xs font-bold uppercase tracking-widest text-slate-500">Benefits</h3><ul class="mt-2 space-y-2 text-sm"><li>• locality: policy cannot drift</li><li>• leverage: Preview equals Reader</li><li>• interface becomes test surface</li><li>• parser changes stay internal</li></ul></div>
+          </div>
+          <div class="mx-6 mb-7 rounded-lg border-l-4 border-emerald-500 bg-emerald-50 px-4 py-3 text-sm text-emerald-950 sm:mx-8"><strong>Deletion test:</strong> a thin renderer extraction would make complexity vanish and is shallow; deleting the full interpretation module would redistribute safety, title, syntax, Mermaid, and download rules across callers.</div>
+        </article>
+
+        <article id="editor-session" class="break-inside-avoid overflow-hidden rounded-2xl border border-slate-200 bg-white module-shadow">
+          <div class="border-b border-slate-200 p-6 sm:p-8">
+            <div class="mb-4 flex flex-wrap gap-2"><span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">Worth exploring</span><span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">local-substitutable</span></div>
+            <h2 class="font-serif text-3xl tracking-tight">Deepen the Editor session</h2>
+            <p class="mt-4 font-mono text-xs leading-6 text-slate-500">src/App.tsx:49–152 · src/styles/app.css:52–88 · src/styles/responsive.test.ts · roadmap: draft recovery, import, explicit save</p>
+          </div>
+
+          <div class="grid gap-px bg-slate-200 lg:grid-cols-2">
+            <figure class="bg-stone-50 p-5 sm:p-7">
+              <figcaption class="mb-3 text-xs font-bold uppercase tracking-widest text-red-700">Before · state crosses thin bands</figcaption>
+              <div class="min-h-[300px] space-y-2 rounded-xl border border-slate-200 bg-white p-5 text-center text-xs font-semibold">
+                <div class="border-l-4 border-red-400 bg-red-50 p-3">React state · tab · split · draft · publish</div>
+                <div class="border-l-4 border-red-400 bg-red-50 p-3">mutable refs · pointer capture · dragging</div>
+                <div class="border-l-4 border-red-400 bg-red-50 p-3">direct DOM · CSS property · body class</div>
+                <div class="border-l-4 border-red-400 bg-red-50 p-3">CSS selectors · breakpoint state</div>
+                <div class="border-l-4 border-red-400 bg-red-50 p-3">CSS text tests · no interaction outcome</div>
+                <div class="pt-1 text-red-700">low locality across every transition</div>
+              </div>
+            </figure>
+            <figure class="bg-stone-50 p-5 sm:p-7">
+              <figcaption class="mb-3 text-xs font-bold uppercase tracking-widest text-emerald-700">After · transitions live together</figcaption>
+              <div class="min-h-[300px] rounded-xl border border-slate-300 bg-white p-5 diagram-grid">
+                <div class="mx-auto flex max-w-md justify-around text-[11px] font-semibold"><span class="rounded border bg-white px-3 py-2">events</span><span class="rounded border bg-white px-3 py-2">visible state</span><span class="rounded border bg-white px-3 py-2">tests</span></div>
+                <div class="deep mx-auto mt-5 w-10/12 rounded-xl border-4 border-slate-800 p-7 text-white">
+                  <div class="text-center text-xs font-bold uppercase tracking-[.18em]">Editor session module</div>
+                  <div class="mt-5 grid grid-cols-3 gap-2 text-center text-[10px] text-slate-300"><span class="rounded bg-white/10 p-2">draft</span><span class="rounded bg-white/10 p-2">saved</span><span class="rounded bg-white/10 p-2">recovery</span><span class="rounded bg-white/10 p-2">pane state</span><span class="rounded bg-white/10 p-2">cleanup</span><span class="rounded bg-white/10 p-2">retry</span></div>
+                </div>
+                <div class="mx-auto mt-4 w-3/5 seam-line pt-2 text-center text-[10px] uppercase tracking-wider text-slate-500">browser stand-ins stay internal</div>
+              </div>
+            </figure>
+          </div>
+
+          <div class="grid gap-7 p-6 sm:p-8 md:grid-cols-[1fr_1fr_.8fr]">
+            <div><h3 class="text-xs font-bold uppercase tracking-widest text-slate-500">Problem</h3><p class="mt-2 text-sm leading-6">Editor behaviour is distributed across state, refs, direct DOM writes, CSS selectors, and publishing callbacks; the tests inspect text instead of interaction outcomes.</p></div>
+            <div><h3 class="text-xs font-bold uppercase tracking-widest text-slate-500">Solution</h3><p class="mt-2 text-sm leading-6">Concentrate authoring-session transitions, recovery, saved-versus-draft meaning, workspace invariants, and cleanup in one deep module with browser details internal.</p></div>
+            <div><h3 class="text-xs font-bold uppercase tracking-widest text-slate-500">Benefits</h3><ul class="mt-2 space-y-2 text-sm"><li>• locality: transitions stay together</li><li>• leverage across event handlers</li><li>• tests observe full sessions</li><li>• CSS checks shrink</li></ul></div>
+          </div>
+          <div class="mx-6 mb-7 rounded-lg border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-950 sm:mx-8"><strong>Deletion test:</strong> deleting isolated drag or word-count helpers would remove complexity, proving they are shallow; deleting a full Editor session module would scatter recovery, save, retry, split, and cleanup rules.</div>
+        </article>
+
+        <article id="share-routing" class="break-inside-avoid overflow-hidden rounded-2xl border border-slate-200 bg-white module-shadow">
+          <div class="border-b border-slate-200 p-6 sm:p-8">
+            <div class="mb-4 flex flex-wrap gap-2"><span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-900">Worth exploring</span><span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">local-substitutable</span></div>
+            <h2 class="font-serif text-3xl tracking-tight">Deepen Share Link routing</h2>
+            <p class="mt-4 font-mono text-xs leading-6 text-slate-500">src/document.ts:1, 7–23 · src/App.tsx:181–183, 188, 203–225 · src/document.test.ts · future Edit Links and public pages</p>
+          </div>
+
+          <div class="grid gap-px bg-slate-200 lg:grid-cols-2">
+            <figure class="bg-stone-50 p-5 sm:p-7">
+              <figcaption class="mb-3 text-xs font-bold uppercase tracking-widest text-red-700">Before · route meaning leaks into callers</figcaption>
+              <div class="min-h-[300px] rounded-xl border border-slate-200 bg-white p-3">
+                <pre class="mermaid">
+flowchart TB
+  W[window.location] --> A[App]
+  A -->|startsWith /s/| P[getShareId]
+  P --> SR[ShareRoute]
+  A -->|pathname = /| H[Home]
+  A -->|every other path| E[Editor]
+  D[Publish dialog] --> SP[sharePath]
+  D --> SU[shareUrl]
+  classDef leak fill:#fef2f2,stroke:#dc2626,stroke-width:2px,color:#991b1b;
+  class A,P,SP,SU leak;
+                </pre>
+              </div>
+            </figure>
+            <figure class="bg-stone-50 p-5 sm:p-7">
+              <figcaption class="mb-3 text-xs font-bold uppercase tracking-widest text-emerald-700">After · capabilities resolve once</figcaption>
+              <div class="min-h-[300px] rounded-xl border border-slate-200 bg-white p-3">
+                <pre class="mermaid">
+flowchart TB
+  W[Browser history adapter] --> N[Deep navigation module]
+  N --> H[Home destination]
+  N --> E[Editor destination]
+  N --> S[Share Link destination]
+  N --> U[Unavailable destination]
+  T[Route tests] --> N
+  classDef deep fill:#0f172a,stroke:#0f172a,stroke-width:4px,color:#fff;
+  class N deep;
+                </pre>
+              </div>
+            </figure>
+          </div>
+
+          <div class="grid gap-7 p-6 sm:p-8 md:grid-cols-[1fr_1fr_.8fr]">
+            <div><h3 class="text-xs font-bold uppercase tracking-widest text-slate-500">Problem</h3><p class="mt-2 text-sm leading-6">Callers must know path grammar, encoding, history updates, routing precedence, and capability meaning; currently every unknown non-share path opens the Editor.</p></div>
+            <div><h3 class="text-xs font-bold uppercase tracking-widest text-slate-500">Solution</h3><p class="mt-2 text-sm leading-6">Concentrate route recognition, capability interpretation, URL construction, unavailable outcomes, and browser-history behaviour in one deep navigation module.</p></div>
+            <div><h3 class="text-xs font-bold uppercase tracking-widest text-slate-500">Benefits</h3><ul class="mt-2 space-y-2 text-sm"><li>• locality: capability meaning concentrates</li><li>• leverage for Edit Links</li><li>• route table becomes test surface</li><li>• malformed paths stay internal</li></ul></div>
+          </div>
+          <div class="mx-6 mb-7 rounded-lg border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-950 sm:mx-8"><strong>Deletion test:</strong> existing helpers retain encoding complexity but leave orchestration outside; deleting the deeper module would spread precedence and capability rules across Home, Editor, Reader, and future public destinations.</div>
+        </article>
+      </section>
+
+      <section id="top-recommendation" class="rounded-2xl bg-emerald-950 p-7 text-emerald-50 shadow-xl sm:p-10">
+        <p class="text-xs font-bold uppercase tracking-[.2em] text-emerald-300">Top recommendation</p>
+        <h2 class="mt-3 font-serif text-3xl"><a class="underline decoration-emerald-500 decoration-2 underline-offset-8" href="#document-lifecycle">Deepen the Document lifecycle</a></h2>
+        <p class="mt-4 max-w-3xl text-sm leading-6 text-emerald-100">It has the strongest present evidence—the test suite already imitates InstantDB’s implementation—and the highest future leverage across Edit Links, images, expiry, deletion, Editor, and Reader.</p>
+      </section>
+
+      <footer class="pb-8 text-xs text-slate-500">Read-only review · 19/19 tests, type checking, and lint passing · no CONTEXT.md or ADRs found</footer>
+    </main>
+  </body>
+</html>
