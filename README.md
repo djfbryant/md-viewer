@@ -16,7 +16,12 @@ The shell can run without a real Instant app; its Instant client initializes onl
 npx instant-cli init-without-files --title MarkShare
 ```
 
-Use `npx instant-cli push schema --yes` after adding that value to provision `instant.schema.ts`.
+Use the following after adding that value to `.env.local` to provision the document schema and its opaque share-link permission rule:
+
+```sh
+npx instant-cli push schema --yes
+npx instant-cli push perms --yes
+```
 
 ## Checks
 
