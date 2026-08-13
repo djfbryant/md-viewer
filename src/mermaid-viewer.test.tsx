@@ -9,7 +9,7 @@ beforeEach(() => {
   const root = document.createElement('div');
   root.id = 'root';
   document.body.append(root);
-  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     if (this.classList.contains('mermaid-viewer__viewport')) {
       return { x: 0, y: 0, top: 0, left: 0, right: 500, bottom: 300, width: 500, height: 300, toJSON: () => ({}) };
     }

@@ -6,6 +6,11 @@ const documents = vi.hoisted(() => {
   return documents;
 });
 
+const mermaidApi = vi.hoisted(() => ({
+  initialize: vi.fn(),
+  render: vi.fn(async () => ({ svg: '<svg role="img" viewBox="0 0 1804 200"></svg>' })),
+}));
+
 vi.mock('./lib/instant-document-persistence', () => ({
   documentLifecycle: {
     publish: vi.fn(async (markdown: string) => {
@@ -19,6 +24,8 @@ vi.mock('./lib/instant-document-persistence', () => ({
     },
   },
 }));
+
+vi.mock('mermaid', () => ({ default: mermaidApi }));
 
 import { App } from './App';
 
@@ -44,6 +51,32 @@ afterEach(() => {
 });
 
 describe('basic anonymous documents', () => {
+  it('uses the same adaptive Mermaid presentation in Preview and the Share Link', async () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const width = this.classList.contains('markdown') ? 600
+        : this.classList.contains('preview') || this.classList.contains('reader-content') ? 1000
+          : 0;
+      return { x: 0, y: 0, top: 0, left: 0, right: width, bottom: 0, width, height: 0, toJSON: () => ({}) };
+    });
+    const markdown = '```mermaid\nwide diagram\n```';
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: markdown } });
+
+    const previewDiagram = await screen.findByRole('img', { name: 'Mermaid diagram' });
+    expect(previewDiagram.closest('.mermaid-diagram')).toHaveAttribute('data-mermaid-wide', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Open Mermaid diagram in expanded view' }));
+    expect(await screen.findByRole('dialog', { name: 'Expanded Mermaid diagram' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close diagram viewer' }));
+
+    fireEvent.click(screen.getByRole('button', { name: /publish/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /open share link/i }));
+    expect(await screen.findByText('Read only')).toBeInTheDocument();
+    const readerDiagram = await screen.findByRole('img', { name: 'Mermaid diagram' });
+    expect(readerDiagram.closest('.mermaid-diagram')).toHaveAttribute('data-mermaid-wide', 'true');
+    expect(screen.getByRole('button', { name: 'Open Mermaid diagram in expanded view' })).toBeInTheDocument();
+  });
+
   it('publishes Markdown with an opaque read-only share link and renders it for a reader', async () => {
     const markdown = '# Release notes\n\nHello **reader**.';
     render(<App />);

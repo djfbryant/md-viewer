@@ -1,5 +1,5 @@
 import DOMPurify from 'dompurify';
-import { Children, createContext, isValidElement, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Children, createContext, isValidElement, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeReact, { type Options as RehypeReactOptions } from 'rehype-react';
@@ -120,6 +120,8 @@ export type MermaidExpandRequest = {
   source: string;
   /** Sanitized rendered SVG, suitable for an expanded visual viewer. */
   svg: string;
+  /** The still-mounted control to restore focus to after closing the viewer. */
+  returnFocusRef: MutableRefObject<HTMLButtonElement | null>;
 };
 
 export type MermaidExpandHandler = (request: MermaidExpandRequest) => void;
@@ -249,6 +251,7 @@ function MermaidDiagram({ source }: { source: string }) {
   const [sizing, setSizing] = useState<MermaidSizingDecision | null>(null);
   const [overflowCue, setOverflowCue] = useState<MermaidOverflowCue>('none');
   const frameRef = useRef<HTMLDivElement>(null);
+  const expandButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -329,11 +332,31 @@ function MermaidDiagram({ source }: { source: string }) {
   }, [sizing, state, viewerOpen]);
 
   if (state.kind === 'rendered') {
-    // An expanded viewer renders this same SVG. Remove the inline copy rather
-    // than merely hiding it, because Mermaid output contains document IDs.
-    if (viewerOpen) return null;
     const wide = sizing?.lane === 'wide';
     const hint = overflowHint(overflowCue);
+    const expandControl = onMermaidExpand && wide && <button
+      type="button"
+      className="mermaid-diagram__expand"
+      aria-label="Open Mermaid diagram in expanded view"
+      data-tooltip="Open expanded view"
+      title="Open expanded view"
+      ref={expandButtonRef}
+      onClick={() => onMermaidExpand({ source, svg: state.svg, returnFocusRef: expandButtonRef })}
+    >
+      <svg aria-hidden="true" viewBox="0 0 16 16" focusable="false">
+        <path d="M6.25 2.5H2.5v3.75M2.75 2.75l4 4M9.75 2.5h3.75v3.75M13.25 2.75l-4 4M6.25 13.5H2.5V9.75M2.75 13.25l4-4M9.75 13.5h3.75V9.75M13.25 13.25l-4-4" />
+      </svg>
+    </button>;
+
+    // An expanded viewer renders this same SVG. Keep the origin control
+    // mounted for focus restoration, but remove the ID-bearing inline SVG.
+    if (viewerOpen) return <figure className="mermaid-diagram" aria-label="Mermaid diagram expanded">
+      <figcaption className="mermaid-diagram__toolbar">
+        <span className="mermaid-diagram__label">Mermaid diagram</span>
+        {expandControl}
+      </figcaption>
+    </figure>;
+
     return <figure
       className={`mermaid-diagram${wide ? ' mermaid-diagram--wide' : ''}${sizing?.overflows ? ' mermaid-diagram--overflowing' : ''}`}
       data-mermaid-scale={sizing?.effectiveScale}
@@ -345,18 +368,7 @@ function MermaidDiagram({ source }: { source: string }) {
       <figcaption className="mermaid-diagram__toolbar">
         <span className="mermaid-diagram__label">Mermaid diagram</span>
         {hint && <span className="mermaid-diagram__overflow-hint" aria-live="polite">{hint}</span>}
-        {onMermaidExpand && <button
-          type="button"
-          className="mermaid-diagram__expand"
-          aria-label="Open Mermaid diagram in expanded view"
-          data-tooltip="Open expanded view"
-          title="Open expanded view"
-          onClick={() => onMermaidExpand({ source, svg: state.svg })}
-        >
-          <svg aria-hidden="true" viewBox="0 0 16 16" focusable="false">
-            <path d="M6.25 2.5H2.5v3.75M2.75 2.75l4 4M9.75 2.5h3.75v3.75M13.25 2.75l-4 4M6.25 13.5H2.5V9.75M2.75 13.25l4-4M9.75 13.5h3.75V9.75M13.25 13.25l-4-4" />
-          </svg>
-        </button>}
+        {expandControl}
       </figcaption>
       <div className="mermaid-diagram__scroll-shell">
         <div

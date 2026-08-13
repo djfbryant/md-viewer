@@ -30,12 +30,12 @@ class ResizeObserverMock {
   }
 }
 
-let widthFor = (_element: Element) => 0;
+let widthFor: (element: Element) => number = () => 0;
 
 beforeEach(() => {
   ResizeObserverMock.instances = [];
   vi.stubGlobal('ResizeObserver', ResizeObserverMock);
-  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     const width = widthFor(this);
     return { x: 0, y: 0, top: 0, left: 0, right: width, bottom: 0, width, height: 0, toJSON: () => ({}) };
   });
@@ -169,7 +169,7 @@ describe('Markdown interpretation', () => {
 
   it('normalizes rendered SVG geometry, recomputes on resize, and cleans up its observer', async () => {
     let proseWidth = 600;
-    let laneWidth = 1000;
+    const laneWidth = 1000;
     widthFor = (element) => {
       if (element.classList.contains('markdown')) return proseWidth;
       if (element.classList.contains('preview')) return laneWidth;
@@ -246,7 +246,8 @@ describe('Markdown interpretation', () => {
   it('provides an accessible expanded-view control and removes inline SVG while its viewer is open', async () => {
     const onMermaidExpand = vi.fn();
     const document = interpretMarkdown('```mermaid\nsized diagram\n```');
-    const rendered = render(<MarkdownView document={document} onMermaidExpand={onMermaidExpand} />);
+    widthFor = (element) => element.classList.contains('markdown') ? 600 : 1000;
+    const rendered = render(<div className="preview"><article className="markdown"><MarkdownView document={document} onMermaidExpand={onMermaidExpand} /></article></div>);
 
     expect(await screen.findByRole('img', { name: 'Mermaid diagram' })).toBeInTheDocument();
     const expand = screen.getByRole('button', { name: 'Open Mermaid diagram in expanded view' });
@@ -258,8 +259,16 @@ describe('Markdown interpretation', () => {
       svg: expect.stringContaining('viewBox="0 0 1200 300"'),
     }));
 
-    rendered.rerender(<MarkdownView document={document} onMermaidExpand={onMermaidExpand} mermaidViewerOpen />);
+    rendered.rerender(<div className="preview"><article className="markdown"><MarkdownView document={document} onMermaidExpand={onMermaidExpand} mermaidViewerOpen /></article></div>);
     expect(screen.queryByRole('img', { name: 'Mermaid diagram' })).toBeNull();
-    expect(rendered.container.querySelector('.mermaid-diagram svg')).toBeNull();
+    expect(rendered.container.querySelector('.mermaid-diagram__viewport svg')).toBeNull();
+  });
+
+  it('keeps fitting diagrams free of expanded-view controls', async () => {
+    widthFor = (element) => element.classList.contains('markdown') ? 1400 : 1600;
+    render(<div className="preview"><article className="markdown"><MarkdownView document={interpretMarkdown('```mermaid\nreplacement diagram\n```')} onMermaidExpand={vi.fn()} /></article></div>);
+
+    expect(await screen.findByRole('img', { name: 'Mermaid diagram' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open Mermaid diagram in expanded view' })).toBeNull();
   });
 });
