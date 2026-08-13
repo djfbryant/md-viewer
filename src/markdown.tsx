@@ -250,6 +250,7 @@ function MermaidDiagram({ source }: { source: string }) {
   const [state, setState] = useState<MermaidState>({ kind: 'loading' });
   const [sizing, setSizing] = useState<MermaidSizingDecision | null>(null);
   const [overflowCue, setOverflowCue] = useState<MermaidOverflowCue>('none');
+  const [overflowHintDismissed, setOverflowHintDismissed] = useState(false);
   const frameRef = useRef<HTMLDivElement>(null);
   const expandButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -257,6 +258,7 @@ function MermaidDiagram({ source }: { source: string }) {
     let active = true;
     setState({ kind: 'loading' });
     setOverflowCue('none');
+    setOverflowHintDismissed(false);
 
     if (!allowsStrictMermaid(source)) {
       setState({ kind: 'invalid' });
@@ -293,6 +295,10 @@ function MermaidDiagram({ source }: { source: string }) {
     const updateOverflowCue = () => {
       setOverflowCue(mermaidOverflowCue(frame.scrollLeft, frame.clientWidth, frame.scrollWidth));
     };
+    const onScroll = () => {
+      if (frame.scrollLeft > 1) setOverflowHintDismissed(true);
+      updateOverflowCue();
+    };
     const updateSizing = () => {
       if (!active) return;
       const next = mermaidSizingDecision(geometry, measuredWidth(prose), laneWidth(wideLane));
@@ -302,7 +308,7 @@ function MermaidDiagram({ source }: { source: string }) {
 
     setSizing(null);
     updateSizing();
-    frame.addEventListener('scroll', updateOverflowCue, { passive: true });
+    frame.addEventListener('scroll', onScroll, { passive: true });
 
     const observed = [frame, prose, wideLane].filter((element, index, elements): element is HTMLElement =>
       element instanceof HTMLElement && elements.indexOf(element) === index,
@@ -313,7 +319,7 @@ function MermaidDiagram({ source }: { source: string }) {
       return () => {
         active = false;
         observer.disconnect();
-        frame.removeEventListener('scroll', updateOverflowCue);
+        frame.removeEventListener('scroll', onScroll);
       };
     }
 
@@ -321,7 +327,7 @@ function MermaidDiagram({ source }: { source: string }) {
     return () => {
       active = false;
       window.removeEventListener('resize', updateSizing);
-      frame.removeEventListener('scroll', updateOverflowCue);
+      frame.removeEventListener('scroll', onScroll);
     };
   }, [state, viewerOpen]);
 
@@ -333,7 +339,7 @@ function MermaidDiagram({ source }: { source: string }) {
 
   if (state.kind === 'rendered') {
     const wide = sizing?.lane === 'wide';
-    const hint = overflowHint(overflowCue);
+    const hint = overflowHintDismissed ? null : overflowHint(overflowCue);
     const expandControl = onMermaidExpand && wide && <button
       type="button"
       className="mermaid-diagram__expand"

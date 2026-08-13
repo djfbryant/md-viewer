@@ -232,6 +232,7 @@ describe('Markdown interpretation', () => {
     scrollLeft = 200;
     fireEvent.scroll(viewport);
     expect(panel).toHaveAttribute('data-mermaid-overflow-cue', 'both');
+    expect(screen.queryByText(/Scroll (left|right|horizontally) to see/)).toBeNull();
 
     scrollLeft = 450;
     fireEvent.scroll(viewport);
