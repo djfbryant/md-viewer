@@ -1,5 +1,5 @@
 import DOMPurify from 'dompurify';
-import { Children, isValidElement, useEffect, useId, useState, type ReactNode } from 'react';
+import { Children, isValidElement, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeReact, { type Options as RehypeReactOptions } from 'rehype-react';
@@ -103,9 +103,106 @@ type MermaidState =
   | { kind: 'rendered'; svg: string }
   | { kind: 'invalid' };
 
+export type MermaidGeometry = {
+  height: number;
+  width: number;
+};
+
+export type MermaidSizingDecision = {
+  effectiveScale: number;
+  effectiveWidth: number;
+  lane: 'prose' | 'wide';
+  overflows: boolean;
+};
+
+export const MERMAID_MINIMUM_SCALE = 0.875;
+
+/**
+ * Chooses the least intrusive readable presentation for any SVG-backed Mermaid
+ * diagram. This deliberately works from rendered geometry rather than Mermaid
+ * source so every diagram type follows the same policy.
+ */
+export function mermaidSizingDecision(
+  geometry: MermaidGeometry | null,
+  proseWidth: number,
+  wideLaneWidth: number,
+): MermaidSizingDecision | null {
+  if (!geometry || !Number.isFinite(geometry.width) || geometry.width <= 0
+    || !Number.isFinite(proseWidth) || proseWidth <= 0
+    || !Number.isFinite(wideLaneWidth) || wideLaneWidth <= 0) return null;
+
+  if (geometry.width <= proseWidth) {
+    return { lane: 'prose', effectiveScale: 1, effectiveWidth: geometry.width, overflows: false };
+  }
+
+  const proseScale = proseWidth / geometry.width;
+  if (proseScale >= MERMAID_MINIMUM_SCALE) {
+    return { lane: 'prose', effectiveScale: proseScale, effectiveWidth: proseWidth, overflows: false };
+  }
+
+  const effectiveScale = Math.max(MERMAID_MINIMUM_SCALE, Math.min(1, wideLaneWidth / geometry.width));
+  const effectiveWidth = geometry.width * effectiveScale;
+  return {
+    lane: 'wide',
+    effectiveScale,
+    effectiveWidth,
+    overflows: effectiveWidth > wideLaneWidth,
+  };
+}
+
+function parseSvgGeometry(svg: SVGSVGElement): MermaidGeometry | null {
+  const viewBox = svg.getAttribute('viewBox') ?? svg.getAttribute('viewbox');
+  if (!viewBox) return null;
+
+  const values = viewBox.trim().split(/[\s,]+/).map(Number);
+  if (values.length !== 4 || values.some((value) => !Number.isFinite(value))) return null;
+  const [x, y, width, height] = values;
+  if (width <= 0 || height <= 0) return null;
+
+  // Mermaid sometimes emits CSS dimensions. A valid viewBox is the reliable
+  // source of natural SVG geometry, and normalising these attributes keeps the
+  // browser's intrinsic ratio stable while CSS applies the chosen scale.
+  svg.setAttribute('viewBox', `${x} ${y} ${width} ${height}`);
+  svg.setAttribute('width', String(width));
+  svg.setAttribute('height', String(height));
+  if (!svg.hasAttribute('preserveAspectRatio')) svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  return { width, height };
+}
+
+function normalizeMermaidSvg(svg: string) {
+  const container = window.document.createElement('div');
+  container.innerHTML = svg;
+  const renderedSvg = container.querySelector('svg');
+  if (renderedSvg instanceof SVGSVGElement) parseSvgGeometry(renderedSvg);
+  return container.innerHTML;
+}
+
+function measuredWidth(element: HTMLElement | null) {
+  if (!element) return 0;
+  const rectWidth = element.getBoundingClientRect().width;
+  return rectWidth > 0 ? rectWidth : element.clientWidth;
+}
+
+function laneWidth(element: HTMLElement | null) {
+  if (!element) return 0;
+  const width = measuredWidth(element);
+  const styles = window.getComputedStyle(element);
+  const horizontalPadding = Number.parseFloat(styles.paddingLeft || '0') + Number.parseFloat(styles.paddingRight || '0');
+  return Math.max(0, width - horizontalPadding);
+}
+
+function sameSizingDecision(left: MermaidSizingDecision | null, right: MermaidSizingDecision | null) {
+  return left?.lane === right?.lane
+    && left?.overflows === right?.overflows
+    && left?.effectiveScale === right?.effectiveScale
+    && left?.effectiveWidth === right?.effectiveWidth;
+}
+
 function MermaidDiagram({ source }: { source: string }) {
   const reactId = useId();
   const [state, setState] = useState<MermaidState>({ kind: 'loading' });
+  const [sizing, setSizing] = useState<MermaidSizingDecision | null>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -120,7 +217,7 @@ function MermaidDiagram({ source }: { source: string }) {
       .then((mermaid) => mermaid.render(`markshare-mermaid-${reactId.replace(/[^a-zA-Z0-9_-]/g, '')}`, source))
       .then(({ svg }) => {
         const sanitizedSvg = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
-        if (active) setState({ kind: 'rendered', svg: sanitizedSvg });
+        if (active) setState({ kind: 'rendered', svg: normalizeMermaidSvg(sanitizedSvg) });
       })
       .catch(() => {
         if (active) setState({ kind: 'invalid' });
@@ -129,8 +226,60 @@ function MermaidDiagram({ source }: { source: string }) {
     return () => { active = false; };
   }, [reactId, source]);
 
+  useLayoutEffect(() => {
+    if (state.kind !== 'rendered') return;
+
+    const frame = frameRef.current;
+    const svg = frame?.querySelector('svg');
+    if (!frame || !(svg instanceof SVGSVGElement)) return;
+
+    frame.scrollLeft = 0;
+    const geometry = parseSvgGeometry(svg);
+    const prose = frame.parentElement instanceof HTMLElement ? frame.parentElement : null;
+    const wideLane = frame.closest<HTMLElement>('.preview, .reader-content') ?? prose;
+    let active = true;
+
+    const updateSizing = () => {
+      if (!active) return;
+      const next = mermaidSizingDecision(geometry, measuredWidth(prose), laneWidth(wideLane));
+      setSizing((current) => sameSizingDecision(current, next) ? current : next);
+    };
+
+    setSizing(null);
+    updateSizing();
+
+    const observed = [frame, prose, wideLane].filter((element, index, elements): element is HTMLElement =>
+      element instanceof HTMLElement && elements.indexOf(element) === index,
+    );
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(updateSizing);
+      observed.forEach((element) => observer.observe(element));
+      return () => {
+        active = false;
+        observer.disconnect();
+      };
+    }
+
+    window.addEventListener('resize', updateSizing);
+    return () => {
+      active = false;
+      window.removeEventListener('resize', updateSizing);
+    };
+  }, [state]);
+
   if (state.kind === 'rendered') {
-    return <div className="mermaid-diagram" role="img" aria-label="Mermaid diagram" dangerouslySetInnerHTML={{ __html: state.svg }} />;
+    const wide = sizing?.lane === 'wide';
+    return <div
+      className={`mermaid-diagram${wide ? ' mermaid-diagram--wide' : ''}${sizing?.overflows ? ' mermaid-diagram--overflowing' : ''}`}
+      data-mermaid-scale={sizing?.effectiveScale}
+      data-mermaid-wide={wide || undefined}
+      data-mermaid-overflows={sizing?.overflows || undefined}
+      ref={frameRef}
+      role="img"
+      aria-label="Mermaid diagram"
+      style={sizing ? { '--mermaid-rendered-width': `${sizing.effectiveWidth}px` } as React.CSSProperties : undefined}
+      dangerouslySetInnerHTML={{ __html: state.svg }}
+    />;
   }
 
   if (state.kind === 'invalid') {

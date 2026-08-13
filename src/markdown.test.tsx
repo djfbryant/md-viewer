@@ -1,20 +1,52 @@
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mermaidApi = vi.hoisted(() => ({
   initialize: vi.fn(),
   render: vi.fn(async (_id: string, source: string) => {
     if (source.includes('not a diagram')) throw new Error('invalid diagram');
     if (source.includes('unsafe output')) return { svg: '<svg role="img" onload="alert(1)"><script>alert(1)</script><a href="javascript:alert(1)">Bad</a></svg>' };
+    if (source.includes('sized diagram')) return { svg: '<svg role="img" viewBox="0 0 1200 300"></svg>' };
+    if (source.includes('replacement diagram')) return { svg: '<svg role="img" viewBox="0 0 400 100"></svg>' };
     return { svg: '<svg role="img" aria-label="Rendered Mermaid diagram"></svg>' };
   }),
 }));
 
 vi.mock('mermaid', () => ({ default: mermaidApi }));
 
-import { interpretMarkdown, MarkdownView } from './markdown';
+import { interpretMarkdown, MarkdownView, mermaidSizingDecision } from './markdown';
 
-afterEach(cleanup);
+class ResizeObserverMock {
+  static instances: ResizeObserverMock[] = [];
+  readonly observe = vi.fn();
+  readonly disconnect = vi.fn();
+
+  constructor(readonly callback: ResizeObserverCallback) {
+    ResizeObserverMock.instances.push(this);
+  }
+
+  trigger() {
+    this.callback([], this as unknown as ResizeObserver);
+  }
+}
+
+let widthFor = (_element: Element) => 0;
+
+beforeEach(() => {
+  ResizeObserverMock.instances = [];
+  vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+    const width = widthFor(this);
+    return { x: 0, y: 0, top: 0, left: 0, right: width, bottom: 0, width, height: 0, toJSON: () => ({}) };
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  widthFor = () => 0;
+});
 
 describe('Markdown interpretation', () => {
   it('derives metadata from the first top-level heading and preserves the source download', () => {
@@ -113,5 +145,61 @@ describe('Markdown interpretation', () => {
     expect(output.container.querySelector('script')).toBeNull();
     expect(output.container.querySelector('[onload]')).toBeNull();
     expect(output.container.innerHTML).not.toContain('javascript:');
+  });
+
+  it('chooses prose, wide-lane, and readable overflowing sizes from SVG geometry', () => {
+    expect(mermaidSizingDecision({ width: 500, height: 100 }, 600, 900)).toEqual({
+      lane: 'prose', effectiveScale: 1, effectiveWidth: 500, overflows: false,
+    });
+    expect(mermaidSizingDecision({ width: 800, height: 100 }, 600, 900)).toEqual({
+      lane: 'wide', effectiveScale: 1, effectiveWidth: 800, overflows: false,
+    });
+    expect(mermaidSizingDecision({ width: 1400, height: 100 }, 600, 1000)).toEqual({
+      lane: 'wide', effectiveScale: 0.875, effectiveWidth: 1225, overflows: true,
+    });
+    expect(mermaidSizingDecision({ width: 0, height: 100 }, 600, 900)).toBeNull();
+  });
+
+  it('normalizes rendered SVG geometry, recomputes on resize, and cleans up its observer', async () => {
+    let proseWidth = 600;
+    let laneWidth = 1000;
+    widthFor = (element) => {
+      if (element.classList.contains('markdown')) return proseWidth;
+      if (element.classList.contains('preview')) return laneWidth;
+      return 0;
+    };
+    const source = '```mermaid\nsized diagram\n```';
+    const rendered = render(<div className="preview"><article className="markdown"><MarkdownView document={interpretMarkdown(source)} /></article></div>);
+
+    const diagram = await screen.findByRole('img', { name: 'Mermaid diagram' });
+    const svg = diagram.querySelector('svg');
+    expect(svg).toHaveAttribute('viewBox', '0 0 1200 300');
+    expect(svg).toHaveAttribute('width', '1200');
+    expect(svg).toHaveAttribute('height', '300');
+    expect(diagram).toHaveAttribute('data-mermaid-wide', 'true');
+    expect(diagram).toHaveAttribute('data-mermaid-overflows', 'true');
+    expect(diagram).toHaveStyle({ '--mermaid-rendered-width': '1050px' });
+
+    proseWidth = 1300;
+    act(() => ResizeObserverMock.instances.forEach((observer) => observer.trigger()));
+    expect(diagram).not.toHaveAttribute('data-mermaid-wide');
+    expect(diagram).toHaveStyle({ '--mermaid-rendered-width': '1200px' });
+
+    rendered.unmount();
+    expect(ResizeObserverMock.instances.every((observer) => observer.disconnect.mock.calls.length === 1)).toBe(true);
+  });
+
+  it('resets sizing when changed Mermaid source produces a new SVG', async () => {
+    let proseWidth = 600;
+    widthFor = (element) => element.classList.contains('markdown') ? proseWidth : 1000;
+    const rendered = render(<div className="preview"><article className="markdown"><MarkdownView document={interpretMarkdown('```mermaid\nsized diagram\n```')} /></article></div>);
+
+    expect(await screen.findByRole('img', { name: 'Mermaid diagram' })).toHaveAttribute('data-mermaid-wide', 'true');
+    proseWidth = 600;
+    rendered.rerender(<div className="preview"><article className="markdown"><MarkdownView document={interpretMarkdown('```mermaid\nreplacement diagram\n```')} /></article></div>);
+
+    const replacement = await screen.findByRole('img', { name: 'Mermaid diagram' });
+    expect(replacement).not.toHaveAttribute('data-mermaid-wide');
+    expect(replacement).toHaveStyle({ '--mermaid-rendered-width': '400px' });
   });
 });
