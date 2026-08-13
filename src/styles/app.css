@@ -76,9 +76,9 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .markdown .hljs-keyword, .markdown .hljs-selector-tag, .markdown .hljs-literal { color: var(--accent-ink); }
 .markdown .hljs-string, .markdown .hljs-attr { color: var(--warn); }
 .markdown .hljs-comment { color: var(--ink-faint); font-style: italic; }
-.mermaid-diagram { overflow: hidden; margin: 1.5em 0; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface); }
+.mermaid-diagram { overflow: hidden; margin: 1.5em 0; border: 1px solid var(--line-soft); border-radius: var(--radius-control); background: color-mix(in srgb, var(--surface) 96%, var(--surface-2)); }
 .mermaid-diagram--wide { width: 100cqw; margin-left: calc((100% - 100cqw) / 2); }
-.mermaid-diagram__toolbar { display: flex; align-items: center; min-height: 34px; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line-soft); background: var(--surface-2); color: var(--ink-soft); }
+.mermaid-diagram__toolbar { display: flex; align-items: center; min-height: 34px; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-bottom: 1px solid color-mix(in srgb, var(--line-soft) 70%, transparent); background: transparent; color: var(--ink-soft); }
 .mermaid-diagram__label { color: var(--ink); font-size: var(--type-small-size); font-weight: var(--weight-semibold); }
 .mermaid-diagram__overflow-hint { overflow: hidden; flex: 1; color: var(--ink-faint); font-size: var(--type-small-size); text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .mermaid-diagram__expand { position: relative; display: inline-grid; width: 26px; height: 26px; flex: none; place-items: center; padding: 0; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink-soft); }
@@ -94,6 +94,11 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .mermaid-diagram__viewport { overflow-x: auto; overscroll-behavior-x: contain; }
 .mermaid-diagram__viewport svg { display: block; width: var(--mermaid-rendered-width, auto); max-width: none; height: auto; margin: 0 auto; }
 .mermaid-diagram--overflowing .mermaid-diagram__viewport svg { margin-left: 0; margin-right: 0; }
+[data-theme='dark'] .mermaid-diagram svg text, [data-theme='dark'] .mermaid-diagram svg tspan, [data-theme='dark'] .mermaid-diagram svg .label { fill: var(--ink) !important; color: var(--ink) !important; }
+[data-theme='dark'] .mermaid-diagram svg .node rect, [data-theme='dark'] .mermaid-diagram svg .node circle, [data-theme='dark'] .mermaid-diagram svg .node ellipse, [data-theme='dark'] .mermaid-diagram svg .node polygon, [data-theme='dark'] .mermaid-diagram svg .entityBox, [data-theme='dark'] .mermaid-diagram svg .label-container { fill: var(--surface-2) !important; stroke: var(--line) !important; }
+[data-theme='dark'] .mermaid-diagram svg .edgeLabel rect, [data-theme='dark'] .mermaid-diagram svg .labelBkg, [data-theme='dark'] .mermaid-diagram svg .labelBox { fill: var(--surface) !important; stroke: var(--line-soft) !important; }
+[data-theme='dark'] .mermaid-diagram svg .flowchart-link, [data-theme='dark'] .mermaid-diagram svg .relationshipLine, [data-theme='dark'] .mermaid-diagram svg .messageLine0, [data-theme='dark'] .mermaid-diagram svg .messageLine1 { stroke: var(--ink-soft) !important; }
+[data-theme='dark'] .mermaid-diagram svg .marker { fill: var(--ink-soft) !important; stroke: var(--ink-soft) !important; }
 .mermaid-loading, .mermaid-fallback { margin: 1.5em 0; color: var(--ink-soft); }
 .mermaid-fallback { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-control); }
 .mermaid-fallback figcaption { margin-bottom: 8px; font-size: .9em; }
