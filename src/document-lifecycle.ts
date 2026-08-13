@@ -1,3 +1,5 @@
+import { interpretMarkdown } from './markdown';
+
 export type SharedDocument = {
   id: string;
   title: string;
@@ -38,9 +40,10 @@ export function createDocumentLifecycle(
     async publish(markdown) {
       const id = generateId();
       const timestamp = now();
+      const interpreted = interpretMarkdown(markdown);
       const document = {
         id,
-        title: documentTitle(markdown),
+        title: interpreted.title,
         markdown,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -71,4 +74,3 @@ export function createDocumentLifecycle(
     },
   };
 }
-import { documentTitle } from './document';

@@ -14,7 +14,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .mark { width: 20px; height: 20px; border-radius: var(--space-2); background: var(--accent); position: relative; flex: none; }
 .mark::after { content: ''; position: absolute; inset: 6px 5px; border-right: 2px solid var(--paper); border-left: 2px solid var(--paper); }
 .bar-actions { display: flex; align-items: center; gap: var(--space-3); margin-left: auto; }
-.button { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-3); min-height: 34px; padding: 7px 13px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font-size: var(--type-button-size); font-weight: var(--weight-medium); white-space: nowrap; transition: background .12s, border-color .12s, opacity .12s; }
+.button { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-3); min-height: 34px; padding: 7px 13px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font-size: var(--type-button-size); font-weight: var(--weight-medium); text-decoration: none; white-space: nowrap; transition: background .12s, border-color .12s, opacity .12s; }
 .button:hover:not(:disabled) { background: var(--surface-2); }
 .button:disabled { cursor: default; opacity: .5; }
 .button--primary { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -64,6 +64,24 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .markdown pre, .markdown code { font-family: var(--mono); }
 .markdown pre { overflow: auto; padding: 14px; border-radius: var(--radius-control); background: var(--sunken); }
 .markdown blockquote { margin: 1em 0; padding-left: 1em; border-left: 3px solid var(--line); color: var(--ink-soft); }
+.markdown table { display: block; width: max-content; max-width: 100%; overflow-x: auto; margin: 1.4em 0; border-collapse: collapse; }
+.markdown th, .markdown td { padding: 8px 12px; border: 1px solid var(--line); text-align: left; }
+.markdown th { background: var(--sunken); font-weight: var(--weight-semibold); }
+.markdown .contains-task-list { padding-left: 0; list-style: none; }
+.markdown .task-list-item { display: flex; gap: 9px; align-items: baseline; }
+.markdown .task-list-item input { accent-color: var(--accent); }
+.markdown .footnotes { margin-top: 2.5em; padding-top: 1em; border-top: 1px solid var(--line); color: var(--ink-soft); font-size: .9em; }
+.markdown .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
+.markdown .hljs { display: block; background: transparent; color: var(--ink); }
+.markdown .hljs-keyword, .markdown .hljs-selector-tag, .markdown .hljs-literal { color: var(--accent-ink); }
+.markdown .hljs-string, .markdown .hljs-attr { color: var(--warn); }
+.markdown .hljs-comment { color: var(--ink-faint); font-style: italic; }
+.mermaid-diagram { overflow-x: auto; margin: 1.5em 0; text-align: center; }
+.mermaid-diagram svg { max-width: 100%; height: auto; }
+.mermaid-loading, .mermaid-fallback { margin: 1.5em 0; color: var(--ink-soft); }
+.mermaid-fallback { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-control); }
+.mermaid-fallback figcaption { margin-bottom: 8px; font-size: .9em; }
+.mermaid-fallback pre { margin: 0; }
 .preview-placeholder { padding-top: 18px; color: var(--ink-faint); font-size: 12px; font-style: italic; }
 .splitter { position: relative; padding: 0; border: 0; background: transparent; cursor: col-resize; touch-action: none; }
 .splitter::before { position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: var(--line); content: ''; transform: translateX(-50%); transition: width .12s, background .12s; }
