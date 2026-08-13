@@ -1,0 +1,63 @@
+:root {
+  --paper: #faf9f6;
+  --surface: #ffffff;
+  --surface-2: #f3f1ec;
+  --sunken: #efece5;
+  --ink: #232019;
+  --ink-soft: #5d574c;
+  --ink-faint: #8f887a;
+  --line: #e6e1d6;
+  --line-soft: #f0ece3;
+  --accent: #3f6f5c;
+  --accent-soft: #e4efe9;
+  --accent-ink: #2c5344;
+  --warn: #8a5a2b;
+  --danger: #8f3a3a;
+  --radius: 10px;
+  --radius-control: 8px;
+  --radius-segment: 9px;
+  --radius-card: 14px;
+  --space-1: 3px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 22px;
+  --space-7: 24px;
+  --space-8: 32px;
+  --space-9: 40px;
+  --space-10: 48px;
+  --type-base-size: 15px;
+  --type-base-line: 1.5;
+  --type-label-size: 11px;
+  --type-small-size: 11.5px;
+  --type-button-size: 13.5px;
+  --type-button-small-size: 12.5px;
+  --type-source-size: 13.4px;
+  --type-document-size: 16px;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --tracking-label: .06em;
+  --shadow: 0 1px 2px rgba(35, 32, 25, .05), 0 8px 24px rgba(35, 32, 25, .06);
+  --sans: 'Inter', ui-sans-serif, -apple-system, 'Segoe UI', system-ui, sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+[data-theme='dark'] {
+  --paper: #15161a;
+  --surface: #1b1d22;
+  --surface-2: #22252b;
+  --sunken: #101114;
+  --ink: #e9e7e0;
+  --ink-soft: #a9a49a;
+  --ink-faint: #7b756b;
+  --line: #2c3038;
+  --line-soft: #23262c;
+  --accent: #7fb79c;
+  --accent-soft: #1f3129;
+  --accent-ink: #a9d4c1;
+  --warn: #c69a63;
+  --danger: #d98a8a;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 30px rgba(0, 0, 0, .35);
+}
