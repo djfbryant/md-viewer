@@ -6,7 +6,13 @@ export function documentTitle(markdown: string) {
 
 export function getShareId(pathname: string) {
   const match = new RegExp(`^${SHARE_PATH_PREFIX}([^/]+)$`).exec(pathname);
-  return match ? decodeURIComponent(match[1]) : null;
+  if (!match) return null;
+
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
 }
 
 export function sharePath(id: string) {
