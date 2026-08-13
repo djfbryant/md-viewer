@@ -1,4 +1,4 @@
-import { init } from '@instantdb/react';
+import { id, init } from '@instantdb/react';
 import schema from '../../instant.schema';
 
 /**
@@ -8,3 +8,5 @@ import schema from '../../instant.schema';
 const appId = import.meta.env.VITE_INSTANT_APP_ID;
 
 export const db = appId ? init({ appId, schema }) : null;
+
+export const createDocumentId = id;
