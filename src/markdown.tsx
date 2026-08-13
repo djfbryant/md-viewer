@@ -1,5 +1,5 @@
 import DOMPurify from 'dompurify';
-import { Children, isValidElement, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Children, createContext, isValidElement, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeReact, { type Options as RehypeReactOptions } from 'rehype-react';
@@ -115,6 +115,24 @@ export type MermaidSizingDecision = {
   overflows: boolean;
 };
 
+export type MermaidExpandRequest = {
+  /** Original Mermaid source, suitable for an editor or source-view panel. */
+  source: string;
+  /** Sanitized rendered SVG, suitable for an expanded visual viewer. */
+  svg: string;
+};
+
+export type MermaidExpandHandler = (request: MermaidExpandRequest) => void;
+
+type MermaidOverflowCue = 'none' | 'start' | 'end' | 'both';
+
+type MermaidPresentation = {
+  onExpand?: MermaidExpandHandler;
+  viewerOpen: boolean;
+};
+
+const MermaidExpandContext = createContext<MermaidPresentation>({ viewerOpen: false });
+
 export const MERMAID_MINIMUM_SCALE = 0.875;
 
 /**
@@ -148,6 +166,32 @@ export function mermaidSizingDecision(
     effectiveWidth,
     overflows: effectiveWidth > wideLaneWidth,
   };
+}
+
+/**
+ * Indicates which edge(s) of an actual native scrolling viewport still contain
+ * content. Unlike the sizing decision, this works from browser scroll metrics
+ * so faded edges and the hint only appear when content can really be reached.
+ */
+export function mermaidOverflowCue(
+  scrollLeft: number,
+  clientWidth: number,
+  scrollWidth: number,
+): MermaidOverflowCue {
+  if (!Number.isFinite(scrollLeft) || !Number.isFinite(clientWidth) || !Number.isFinite(scrollWidth)
+    || clientWidth <= 0 || scrollWidth <= clientWidth + 1) return 'none';
+
+  const hasMoreBefore = scrollLeft > 1;
+  const hasMoreAfter = scrollLeft + clientWidth < scrollWidth - 1;
+  if (hasMoreBefore && hasMoreAfter) return 'both';
+  return hasMoreBefore ? 'start' : hasMoreAfter ? 'end' : 'none';
+}
+
+function overflowHint(cue: MermaidOverflowCue) {
+  if (cue === 'start') return 'Scroll left to see the rest of this diagram';
+  if (cue === 'end') return 'Scroll right to see the rest of this diagram';
+  if (cue === 'both') return 'Scroll horizontally to see more of this diagram';
+  return null;
 }
 
 function parseSvgGeometry(svg: SVGSVGElement): MermaidGeometry | null {
@@ -200,13 +244,16 @@ function sameSizingDecision(left: MermaidSizingDecision | null, right: MermaidSi
 
 function MermaidDiagram({ source }: { source: string }) {
   const reactId = useId();
+  const { onExpand: onMermaidExpand, viewerOpen } = useContext(MermaidExpandContext);
   const [state, setState] = useState<MermaidState>({ kind: 'loading' });
   const [sizing, setSizing] = useState<MermaidSizingDecision | null>(null);
+  const [overflowCue, setOverflowCue] = useState<MermaidOverflowCue>('none');
   const frameRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let active = true;
     setState({ kind: 'loading' });
+    setOverflowCue('none');
 
     if (!allowsStrictMermaid(source)) {
       setState({ kind: 'invalid' });
@@ -227,7 +274,7 @@ function MermaidDiagram({ source }: { source: string }) {
   }, [reactId, source]);
 
   useLayoutEffect(() => {
-    if (state.kind !== 'rendered') return;
+    if (state.kind !== 'rendered' || viewerOpen) return;
 
     const frame = frameRef.current;
     const svg = frame?.querySelector('svg');
@@ -235,18 +282,24 @@ function MermaidDiagram({ source }: { source: string }) {
 
     frame.scrollLeft = 0;
     const geometry = parseSvgGeometry(svg);
-    const prose = frame.parentElement instanceof HTMLElement ? frame.parentElement : null;
+    const prose = frame.closest<HTMLElement>('.markdown')
+      ?? (frame.parentElement instanceof HTMLElement ? frame.parentElement : null);
     const wideLane = frame.closest<HTMLElement>('.preview, .reader-content') ?? prose;
     let active = true;
 
+    const updateOverflowCue = () => {
+      setOverflowCue(mermaidOverflowCue(frame.scrollLeft, frame.clientWidth, frame.scrollWidth));
+    };
     const updateSizing = () => {
       if (!active) return;
       const next = mermaidSizingDecision(geometry, measuredWidth(prose), laneWidth(wideLane));
       setSizing((current) => sameSizingDecision(current, next) ? current : next);
+      updateOverflowCue();
     };
 
     setSizing(null);
     updateSizing();
+    frame.addEventListener('scroll', updateOverflowCue, { passive: true });
 
     const observed = [frame, prose, wideLane].filter((element, index, elements): element is HTMLElement =>
       element instanceof HTMLElement && elements.indexOf(element) === index,
@@ -257,6 +310,7 @@ function MermaidDiagram({ source }: { source: string }) {
       return () => {
         active = false;
         observer.disconnect();
+        frame.removeEventListener('scroll', updateOverflowCue);
       };
     }
 
@@ -264,22 +318,56 @@ function MermaidDiagram({ source }: { source: string }) {
     return () => {
       active = false;
       window.removeEventListener('resize', updateSizing);
+      frame.removeEventListener('scroll', updateOverflowCue);
     };
-  }, [state]);
+  }, [state, viewerOpen]);
+
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    if (state.kind !== 'rendered' || viewerOpen || !frame) return;
+    setOverflowCue(mermaidOverflowCue(frame.scrollLeft, frame.clientWidth, frame.scrollWidth));
+  }, [sizing, state, viewerOpen]);
 
   if (state.kind === 'rendered') {
+    // An expanded viewer renders this same SVG. Remove the inline copy rather
+    // than merely hiding it, because Mermaid output contains document IDs.
+    if (viewerOpen) return null;
     const wide = sizing?.lane === 'wide';
-    return <div
+    const hint = overflowHint(overflowCue);
+    return <figure
       className={`mermaid-diagram${wide ? ' mermaid-diagram--wide' : ''}${sizing?.overflows ? ' mermaid-diagram--overflowing' : ''}`}
       data-mermaid-scale={sizing?.effectiveScale}
       data-mermaid-wide={wide || undefined}
       data-mermaid-overflows={sizing?.overflows || undefined}
-      ref={frameRef}
-      role="img"
-      aria-label="Mermaid diagram"
+      data-mermaid-overflow-cue={overflowCue}
       style={sizing ? { '--mermaid-rendered-width': `${sizing.effectiveWidth}px` } as React.CSSProperties : undefined}
-      dangerouslySetInnerHTML={{ __html: state.svg }}
-    />;
+    >
+      <figcaption className="mermaid-diagram__toolbar">
+        <span className="mermaid-diagram__label">Mermaid diagram</span>
+        {hint && <span className="mermaid-diagram__overflow-hint" aria-live="polite">{hint}</span>}
+        {onMermaidExpand && <button
+          type="button"
+          className="mermaid-diagram__expand"
+          aria-label="Open Mermaid diagram in expanded view"
+          data-tooltip="Open expanded view"
+          title="Open expanded view"
+          onClick={() => onMermaidExpand({ source, svg: state.svg })}
+        >
+          <svg aria-hidden="true" viewBox="0 0 16 16" focusable="false">
+            <path d="M6.25 2.5H2.5v3.75M2.75 2.75l4 4M9.75 2.5h3.75v3.75M13.25 2.75l-4 4M6.25 13.5H2.5V9.75M2.75 13.25l4-4M9.75 13.5h3.75V9.75M13.25 13.25l-4-4" />
+          </svg>
+        </button>}
+      </figcaption>
+      <div className="mermaid-diagram__scroll-shell">
+        <div
+          className="mermaid-diagram__viewport"
+          ref={frameRef}
+          role="img"
+          aria-label="Mermaid diagram"
+          dangerouslySetInnerHTML={{ __html: state.svg }}
+        />
+      </div>
+    </figure>;
   }
 
   if (state.kind === 'invalid') {
@@ -348,6 +436,19 @@ export function downloadMarkdown(document: InterpretedMarkdown) {
   URL.revokeObjectURL(url);
 }
 
-export function MarkdownView({ document }: { document: InterpretedMarkdown }) {
-  return document.content;
+export function MarkdownView({
+  document,
+  onMermaidExpand,
+  mermaidViewerOpen = false,
+}: {
+  document: InterpretedMarkdown;
+  /** Connect this to a viewer/dialog if expanded diagrams should be available. */
+  onMermaidExpand?: MermaidExpandHandler;
+  /**
+   * Set while the parent renders an expanded Mermaid viewer. This removes the
+   * inline SVG DOM so Mermaid's IDs are never duplicated in the document.
+   */
+  mermaidViewerOpen?: boolean;
+}) {
+  return <MermaidExpandContext.Provider value={{ onExpand: onMermaidExpand, viewerOpen: mermaidViewerOpen }}>{document.content}</MermaidExpandContext.Provider>;
 }

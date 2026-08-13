@@ -76,11 +76,24 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .markdown .hljs-keyword, .markdown .hljs-selector-tag, .markdown .hljs-literal { color: var(--accent-ink); }
 .markdown .hljs-string, .markdown .hljs-attr { color: var(--warn); }
 .markdown .hljs-comment { color: var(--ink-faint); font-style: italic; }
-.mermaid-diagram { overflow-x: auto; margin: 1.5em 0; text-align: center; }
+.mermaid-diagram { overflow: hidden; margin: 1.5em 0; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface); }
 .mermaid-diagram--wide { width: 100cqw; margin-left: calc((100% - 100cqw) / 2); }
-.mermaid-diagram--overflowing { text-align: left; }
-.mermaid-diagram svg { display: block; width: var(--mermaid-rendered-width, auto); max-width: none; height: auto; margin: 0 auto; }
-.mermaid-diagram--overflowing svg { margin-left: 0; margin-right: 0; }
+.mermaid-diagram__toolbar { display: flex; align-items: center; min-height: 34px; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line-soft); background: var(--surface-2); color: var(--ink-soft); }
+.mermaid-diagram__label { color: var(--ink); font-size: var(--type-small-size); font-weight: var(--weight-semibold); }
+.mermaid-diagram__overflow-hint { overflow: hidden; flex: 1; color: var(--ink-faint); font-size: var(--type-small-size); text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.mermaid-diagram__expand { position: relative; display: inline-grid; width: 26px; height: 26px; flex: none; place-items: center; padding: 0; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink-soft); }
+.mermaid-diagram__expand:hover { border-color: var(--line); background: var(--surface); color: var(--ink); }
+.mermaid-diagram__expand svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.35; }
+.mermaid-diagram__expand::after { position: absolute; z-index: 1; right: 0; bottom: calc(100% + var(--space-2)); width: max-content; max-width: 180px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); background: var(--ink); color: var(--paper); content: attr(data-tooltip); font-size: var(--type-small-size); line-height: 1.2; opacity: 0; pointer-events: none; transform: translateY(2px); transition: opacity .12s, transform .12s; }
+.mermaid-diagram__expand:hover::after, .mermaid-diagram__expand:focus-visible::after { opacity: 1; transform: translateY(0); }
+.mermaid-diagram__scroll-shell { position: relative; overflow: hidden; }
+.mermaid-diagram__scroll-shell::before, .mermaid-diagram__scroll-shell::after { position: absolute; z-index: 1; top: 0; bottom: 0; width: 28px; content: ''; opacity: 0; pointer-events: none; transition: opacity .12s; }
+.mermaid-diagram__scroll-shell::before { left: 0; background: linear-gradient(90deg, var(--surface), transparent); }
+.mermaid-diagram__scroll-shell::after { right: 0; background: linear-gradient(270deg, var(--surface), transparent); }
+.mermaid-diagram[data-mermaid-overflow-cue='start'] .mermaid-diagram__scroll-shell::before, .mermaid-diagram[data-mermaid-overflow-cue='both'] .mermaid-diagram__scroll-shell::before, .mermaid-diagram[data-mermaid-overflow-cue='end'] .mermaid-diagram__scroll-shell::after, .mermaid-diagram[data-mermaid-overflow-cue='both'] .mermaid-diagram__scroll-shell::after { opacity: 1; }
+.mermaid-diagram__viewport { overflow-x: auto; overscroll-behavior-x: contain; }
+.mermaid-diagram__viewport svg { display: block; width: var(--mermaid-rendered-width, auto); max-width: none; height: auto; margin: 0 auto; }
+.mermaid-diagram--overflowing .mermaid-diagram__viewport svg { margin-left: 0; margin-right: 0; }
 .mermaid-loading, .mermaid-fallback { margin: 1.5em 0; color: var(--ink-soft); }
 .mermaid-fallback { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-control); }
 .mermaid-fallback figcaption { margin-bottom: 8px; font-size: .9em; }

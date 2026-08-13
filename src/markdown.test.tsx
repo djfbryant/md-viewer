@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mermaidApi = vi.hoisted(() => ({
@@ -14,7 +14,7 @@ const mermaidApi = vi.hoisted(() => ({
 
 vi.mock('mermaid', () => ({ default: mermaidApi }));
 
-import { interpretMarkdown, MarkdownView, mermaidSizingDecision } from './markdown';
+import { interpretMarkdown, MarkdownView, mermaidOverflowCue, mermaidSizingDecision } from './markdown';
 
 class ResizeObserverMock {
   static instances: ResizeObserverMock[] = [];
@@ -160,6 +160,13 @@ describe('Markdown interpretation', () => {
     expect(mermaidSizingDecision({ width: 0, height: 100 }, 600, 900)).toBeNull();
   });
 
+  it('describes only the native scroll edges that still contain diagram content', () => {
+    expect(mermaidOverflowCue(0, 600, 600)).toBe('none');
+    expect(mermaidOverflowCue(0, 600, 1000)).toBe('end');
+    expect(mermaidOverflowCue(150, 600, 1000)).toBe('both');
+    expect(mermaidOverflowCue(400, 600, 1000)).toBe('start');
+  });
+
   it('normalizes rendered SVG geometry, recomputes on resize, and cleans up its observer', async () => {
     let proseWidth = 600;
     let laneWidth = 1000;
@@ -171,14 +178,16 @@ describe('Markdown interpretation', () => {
     const source = '```mermaid\nsized diagram\n```';
     const rendered = render(<div className="preview"><article className="markdown"><MarkdownView document={interpretMarkdown(source)} /></article></div>);
 
-    const diagram = await screen.findByRole('img', { name: 'Mermaid diagram' });
+    const diagram = await screen.findByRole('img', { name: 'Mermaid diagram' }).then((svg) => svg.closest('.mermaid-diagram')!);
     const svg = diagram.querySelector('svg');
     expect(svg).toHaveAttribute('viewBox', '0 0 1200 300');
     expect(svg).toHaveAttribute('width', '1200');
     expect(svg).toHaveAttribute('height', '300');
-    expect(diagram).toHaveAttribute('data-mermaid-wide', 'true');
-    expect(diagram).toHaveAttribute('data-mermaid-overflows', 'true');
-    expect(diagram).toHaveStyle({ '--mermaid-rendered-width': '1050px' });
+    await waitFor(() => {
+      expect(diagram).toHaveAttribute('data-mermaid-wide', 'true');
+      expect(diagram).toHaveAttribute('data-mermaid-overflows', 'true');
+      expect(diagram).toHaveStyle({ '--mermaid-rendered-width': '1050px' });
+    });
 
     proseWidth = 1300;
     act(() => ResizeObserverMock.instances.forEach((observer) => observer.trigger()));
@@ -194,12 +203,63 @@ describe('Markdown interpretation', () => {
     widthFor = (element) => element.classList.contains('markdown') ? proseWidth : 1000;
     const rendered = render(<div className="preview"><article className="markdown"><MarkdownView document={interpretMarkdown('```mermaid\nsized diagram\n```')} /></article></div>);
 
-    expect(await screen.findByRole('img', { name: 'Mermaid diagram' })).toHaveAttribute('data-mermaid-wide', 'true');
+    expect((await screen.findByRole('img', { name: 'Mermaid diagram' })).closest('.mermaid-diagram')).toHaveAttribute('data-mermaid-wide', 'true');
     proseWidth = 600;
     rendered.rerender(<div className="preview"><article className="markdown"><MarkdownView document={interpretMarkdown('```mermaid\nreplacement diagram\n```')} /></article></div>);
 
-    const replacement = await screen.findByRole('img', { name: 'Mermaid diagram' });
+    const replacement = await screen.findByRole('img', { name: 'Mermaid diagram' }).then((svg) => svg.closest('.mermaid-diagram')!);
     expect(replacement).not.toHaveAttribute('data-mermaid-wide');
     expect(replacement).toHaveStyle({ '--mermaid-rendered-width': '400px' });
+  });
+
+  it('shows accurate native overflow cues and resets them for a replacement diagram', async () => {
+    widthFor = (element) => element.classList.contains('markdown') ? 600 : 1000;
+    const source = '```mermaid\nsized diagram\n```';
+    const rendered = render(<div className="preview"><article className="markdown"><MarkdownView document={interpretMarkdown(source)} /></article></div>);
+    const viewport = await screen.findByRole('img', { name: 'Mermaid diagram' });
+    let scrollLeft = 0;
+    Object.defineProperties(viewport, {
+      clientWidth: { configurable: true, get: () => 600 },
+      scrollWidth: { configurable: true, get: () => 1050 },
+      scrollLeft: { configurable: true, get: () => scrollLeft, set: (value) => { scrollLeft = value; } },
+    });
+
+    act(() => ResizeObserverMock.instances.forEach((observer) => observer.trigger()));
+    const panel = viewport.closest('.mermaid-diagram');
+    expect(panel).toHaveAttribute('data-mermaid-overflow-cue', 'end');
+    expect(screen.getByText('Scroll right to see the rest of this diagram')).toBeInTheDocument();
+
+    scrollLeft = 200;
+    fireEvent.scroll(viewport);
+    expect(panel).toHaveAttribute('data-mermaid-overflow-cue', 'both');
+
+    scrollLeft = 450;
+    fireEvent.scroll(viewport);
+    expect(panel).toHaveAttribute('data-mermaid-overflow-cue', 'start');
+
+    rendered.rerender(<div className="preview"><article className="markdown"><MarkdownView document={interpretMarkdown('```mermaid\nreplacement diagram\n```')} /></article></div>);
+    const replacement = await screen.findByRole('img', { name: 'Mermaid diagram' });
+    expect(replacement.closest('.mermaid-diagram')).toHaveAttribute('data-mermaid-overflow-cue', 'none');
+    expect(screen.queryByText(/Scroll (left|right|horizontally) to see/)).toBeNull();
+  });
+
+  it('provides an accessible expanded-view control and removes inline SVG while its viewer is open', async () => {
+    const onMermaidExpand = vi.fn();
+    const document = interpretMarkdown('```mermaid\nsized diagram\n```');
+    const rendered = render(<MarkdownView document={document} onMermaidExpand={onMermaidExpand} />);
+
+    expect(await screen.findByRole('img', { name: 'Mermaid diagram' })).toBeInTheDocument();
+    const expand = screen.getByRole('button', { name: 'Open Mermaid diagram in expanded view' });
+    expect(expand).toHaveAttribute('title', 'Open expanded view');
+    expect(expand).toHaveAttribute('data-tooltip', 'Open expanded view');
+    fireEvent.click(expand);
+    expect(onMermaidExpand).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'sized diagram',
+      svg: expect.stringContaining('viewBox="0 0 1200 300"'),
+    }));
+
+    rendered.rerender(<MarkdownView document={document} onMermaidExpand={onMermaidExpand} mermaidViewerOpen />);
+    expect(screen.queryByRole('img', { name: 'Mermaid diagram' })).toBeNull();
+    expect(rendered.container.querySelector('.mermaid-diagram svg')).toBeNull();
   });
 });
