@@ -156,20 +156,24 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
 
 type SharedDocument = { id: string; title: string; markdown: string };
 
-function Reader({ document }: { document: SharedDocument }) {
+function ReaderLayout({ children, title }: { children: React.ReactNode; title?: string }) {
   return <main className="reader-shell">
-    <header className="app-bar reader-bar"><Brand /><div className="document-title"><span>{document.title}</span><span className="pill">Read only</span></div></header>
-    <div className="reader-content"><article className="markdown"><ReactMarkdown>{document.markdown}</ReactMarkdown></article></div>
+    <header className="app-bar reader-bar"><Brand />{title && <div className="document-title"><span>{title}</span><span className="pill">Read only</span></div>}</header>
+    {children}
   </main>;
 }
 
+function Reader({ document }: { document: SharedDocument }) {
+  return <ReaderLayout title={document.title}><div className="reader-content"><article className="markdown"><ReactMarkdown>{document.markdown}</ReactMarkdown></article></div></ReaderLayout>;
+}
+
 function MissingDocument() {
-  return <main className="reader-shell"><header className="app-bar reader-bar"><Brand /></header><section className="reader-message"><h1>Document unavailable</h1><p>This share link is invalid or the document is no longer available.</p></section></main>;
+  return <ReaderLayout><section className="reader-message"><h1>Document unavailable</h1><p>This share link is invalid or the document is no longer available.</p></section></ReaderLayout>;
 }
 
 function ConfiguredShareReader({ documentId }: { documentId: string }) {
   const { data, error, isLoading } = db!.useQuery({ documents: { $: { where: { id: documentId } } } }, { ruleParams: { knownDocumentId: documentId } });
-  if (isLoading) return <main className="reader-shell"><header className="app-bar reader-bar"><Brand /></header><section className="reader-message"><p>Opening document…</p></section></main>;
+  if (isLoading) return <ReaderLayout><section className="reader-message"><p>Opening document…</p></section></ReaderLayout>;
   const document = data?.documents[0] as SharedDocument | undefined;
   return error || !document ? <MissingDocument /> : <Reader document={document} />;
 }
@@ -214,7 +218,7 @@ export function App() {
   };
 
   const shareId = getShareId(pathname);
-  if (shareId) return <ShareRoute documentId={shareId} />;
+  if (pathname.startsWith('/s/')) return shareId ? <ShareRoute documentId={shareId} /> : <MissingDocument />;
 
   return pathname === '/'
     ? <Home preference={preference} onCycle={cycleTheme} onCreate={() => navigate('/new')} />
