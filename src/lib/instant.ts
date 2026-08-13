@@ -6,7 +6,8 @@ import schema from '../../instant.schema';
  * required at deployment time; the bootstrap shell itself makes no database calls.
  */
 const appId = import.meta.env.VITE_INSTANT_APP_ID;
+const canUseInstant = typeof indexedDB !== 'undefined';
 
-export const db = appId ? init({ appId, schema }) : null;
+export const db = appId && canUseInstant ? init({ appId, schema }) : null;
 
 export const createDocumentId = id;

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { documentTitle, getShareId, sharePath, shareUrl } from './document';
-import { createDocumentId, db } from './lib/instant';
+import { getShareId, sharePath, shareUrl } from './document';
+import { type SharedDocument } from './document-lifecycle';
+import { documentLifecycle } from './lib/instant-document-persistence';
 import { applyTheme, getStoredTheme, nextTheme, type ThemePreference, storeTheme } from './theme';
 
 const DEFAULT_SPLIT = 50;
@@ -94,27 +95,17 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
   };
 
   const publish = async () => {
-    if (!db) {
-      setPublishError('Publishing needs an InstantDB app. Add VITE_INSTANT_APP_ID to publish this document.');
-      return;
-    }
-
-    const id = createDocumentId();
     setIsPublishing(true);
     setPublishError(null);
-    try {
-      await db.transact(db.tx.documents[id].ruleParams({ knownDocumentId: id }).update({
-        title: documentTitle(markdown),
-        markdown,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }));
-      setPublishedId(id);
-    } catch {
+    const outcome = await documentLifecycle.publish(markdown);
+    if (outcome.kind === 'published') {
+      setPublishedId(outcome.document.id);
+    } else if (outcome.kind === 'not-configured') {
+      setPublishError('Publishing needs an InstantDB app. Add VITE_INSTANT_APP_ID to publish this document.');
+    } else {
       setPublishError('We could not publish this document. Please try again.');
-    } finally {
-      setIsPublishing(false);
     }
+    setIsPublishing(false);
   };
 
   return (
@@ -154,8 +145,6 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
   );
 }
 
-type SharedDocument = { id: string; title: string; markdown: string };
-
 function ReaderLayout({ children, title }: { children: React.ReactNode; title?: string }) {
   return <main className="reader-shell">
     <header className="app-bar reader-bar"><Brand />{title && <div className="document-title"><span>{title}</span><span className="pill">Read only</span></div>}</header>
@@ -171,15 +160,10 @@ function MissingDocument() {
   return <ReaderLayout><section className="reader-message"><h1>Document unavailable</h1><p>This share link is invalid or the document is no longer available.</p></section></ReaderLayout>;
 }
 
-function ConfiguredShareReader({ documentId }: { documentId: string }) {
-  const { data, error, isLoading } = db!.useQuery({ documents: { $: { where: { id: documentId } } } }, { ruleParams: { knownDocumentId: documentId } });
-  if (isLoading) return <ReaderLayout><section className="reader-message"><p>Opening document…</p></section></ReaderLayout>;
-  const document = data?.documents[0] as SharedDocument | undefined;
-  return error || !document ? <MissingDocument /> : <Reader document={document} />;
-}
-
 function ShareRoute({ documentId }: { documentId: string }) {
-  return db ? <ConfiguredShareReader documentId={documentId} /> : <MissingDocument />;
+  const outcome = documentLifecycle.useShareDocument(documentId);
+  if (outcome.kind === 'loading') return <ReaderLayout><section className="reader-message"><p>Opening document…</p></section></ReaderLayout>;
+  return outcome.kind === 'available' ? <Reader document={outcome.document} /> : <MissingDocument />;
 }
 
 export function App() {

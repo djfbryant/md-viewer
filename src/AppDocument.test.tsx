@@ -1,30 +1,22 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const instant = vi.hoisted(() => {
+const documents = vi.hoisted(() => {
   const documents: Array<{ id: string; title: string; markdown: string }> = [];
-  const transact = vi.fn(async (transaction: { value: { id: string; title: string; markdown: string } }) => {
-    documents.push(transaction.value);
-  });
-  return { documents, transact };
+  return documents;
 });
 
-vi.mock('./lib/instant', () => ({
-  createDocumentId: () => 'opaque-document-id',
-  db: {
-    transact: instant.transact,
-    tx: {
-      documents: new Proxy({}, {
-        get: (_, id: string) => ({
-          ruleParams: () => ({ update: (value: { title: string; markdown: string }) => ({ value: { id, ...value } }) }),
-        }),
-      }),
-    },
-    useQuery: (query: { documents: { $: { where: { id: string } } } }) => ({
-      data: { documents: instant.documents.filter((document) => document.id === query.documents.$.where.id) },
-      error: undefined,
-      isLoading: false,
+vi.mock('./lib/instant-document-persistence', () => ({
+  documentLifecycle: {
+    publish: vi.fn(async (markdown: string) => {
+      const document = { id: 'opaque-document-id', title: markdown.startsWith('# ') ? markdown.split('\n')[0].slice(2) : 'Untitled document', markdown };
+      documents.push(document);
+      return { kind: 'published', document };
     }),
+    useShareDocument: (id: string) => {
+      const document = documents.find((candidate) => candidate.id === id);
+      return document ? { kind: 'available', document } : { kind: 'unavailable' };
+    },
   },
 }));
 
@@ -41,8 +33,7 @@ beforeEach(() => {
       setItem: (key: string, value: string) => values.set(key, value),
     },
   });
-  instant.documents.length = 0;
-  instant.transact.mockClear();
+  documents.length = 0;
   window.history.replaceState({}, '', '/');
   window.matchMedia = vi.fn().mockImplementation(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
 });
@@ -60,10 +51,6 @@ describe('basic anonymous documents', () => {
 
     expect(await screen.findByRole('heading', { name: 'Your document is live' })).toBeInTheDocument();
     expect(screen.getAllByText(/http:\/\/localhost\/s\/opaque-document-id/)).toHaveLength(2);
-    expect(instant.transact).toHaveBeenCalledWith(expect.objectContaining({ value: expect.objectContaining({
-      id: 'opaque-document-id', title: 'Release notes', markdown: '# Release notes\n\nHello **reader**.',
-    }) }));
-
     fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
     expect(await screen.findByText('Read only')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Release notes' })).toBeInTheDocument();
