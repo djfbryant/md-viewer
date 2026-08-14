@@ -17,7 +17,10 @@ const rules = {
   $files: {
     allow: {
       view: "data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/')",
-      create: "data.path.startsWith('documents/')",
+      // uploadFile cannot send ruleParams. A live startsWith('documents/')
+      // create rule still denied anonymous uploads, so create stays open
+      // while view and delete stay capability-gated.
+      create: 'true',
       update: 'false',
       delete: "data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/') && ruleParams.editId != null",
     },

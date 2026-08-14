@@ -3,9 +3,9 @@
 html, body, #root { height: 100%; overflow: hidden; }
 body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); font-size: var(--type-base-size); line-height: var(--type-base-line); font-feature-settings: 'cv05' 1, 'ss03' 1; -webkit-font-smoothing: antialiased; }
 body.is-resizing { cursor: col-resize; user-select: none; }
-button, textarea { font: inherit; }
+button, textarea, input { font: inherit; }
 button { cursor: pointer; }
-button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .app-bar { display: flex; align-items: center; gap: var(--space-4); height: 56px; flex: none; padding: 0 var(--space-5); background: var(--surface); border-bottom: 1px solid var(--line); }
 .brand { display: inline-flex; align-items: center; gap: var(--space-3); color: var(--ink); font-weight: var(--weight-bold); letter-spacing: -.015em; white-space: nowrap; }
@@ -140,7 +140,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .dialog-help { margin: 0; }
 .dialog-row { display: flex; align-items: center; gap: 8px; }
 .dialog-row input[type='datetime-local'] { min-width: 0; flex: 1; padding: 7px 11px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--sunken); color: var(--ink); font: inherit; font-family: var(--mono); font-size: 12.5px; }
-.link-box { display: block; overflow: hidden; padding: 9px 11px; border: 1px solid var(--line-soft); border-radius: var(--radius-control); background: var(--sunken); font-family: var(--mono); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.link-box { display: block; width: 100%; overflow: hidden; padding: 9px 11px; border: 1px solid var(--line-soft); border-radius: var(--radius-control); background: var(--sunken); color: var(--ink); font-family: var(--mono); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
 .reader-expiry { color: var(--ink-faint); font-family: var(--mono); font-size: var(--type-small-size); }
 .reader-content { flex: 1; overflow: auto; padding: 56px 24px 120px; background: var(--surface); font-size: 16px; container-type: inline-size; }.reader-content .markdown { max-width: 66ch; }.reader-content .mermaid-diagram--wide { width: 100cqw; margin-left: calc((100% - 100cqw) / 2); }.reader-message { width: min(66ch, 100%); margin: auto; padding: 56px 24px; color: var(--ink-soft); }.reader-message h1 { color: var(--ink); }
 

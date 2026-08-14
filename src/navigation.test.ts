@@ -10,6 +10,15 @@ describe('document routes', () => {
     expect(recognizeRoute('/e/private-edit/more')).toEqual({ kind: 'unavailable' });
   });
 
+  it('round-trips Instant-shaped share IDs and still treats a truncated token as a share route', () => {
+    const documentId = '52567466-9a13-483a-9e62-335adaf3ca72';
+    expect(recognizeRoute(sharePath(documentId))).toEqual({ kind: 'share', documentId });
+    expect(recognizeRoute(`/s/${documentId.slice(0, 18)}`)).toEqual({
+      kind: 'share',
+      documentId: documentId.slice(0, 18),
+    });
+  });
+
   it('treats home and the new-document editor as exact paths', () => {
     expect(recognizeRoute('/')).toEqual({ kind: 'home' });
     expect(recognizeRoute('/new')).toEqual({ kind: 'editor' });

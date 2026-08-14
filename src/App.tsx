@@ -43,6 +43,22 @@ function SiteLinks({ current, onNavigate }: { current?: InfoPage; onNavigate: (p
   );
 }
 
+function LinkBox({ label, value }: { label: string; value: string }) {
+  const selectValue = (event: { currentTarget: HTMLInputElement }) => {
+    event.currentTarget.select();
+  };
+  return (
+    <input
+      className="link-box"
+      readOnly
+      value={value}
+      aria-label={label}
+      onFocus={selectValue}
+      onClick={selectValue}
+    />
+  );
+}
+
 /** Keeps Preview and Share Link on the same Mermaid presentation and viewer path. */
 function RenderedDocument({ document, imageSources }: { document: InterpretedMarkdown; imageSources?: Record<string, string> }) {
   const [expandedMermaid, setExpandedMermaid] = useState<MermaidExpandRequest | null>(null);
@@ -270,11 +286,11 @@ function Editor({
           <p>Anyone with the share link can read it. No one can change it.</p>
           <div className="dialog-field">
             <span className="label">Share link — read only</span>
-            <span className="link-box">{shareUrl(session.publishedId)}</span>
+            <LinkBox label="Share link — read only" value={shareUrl(session.publishedId)} />
           </div>
           <div className="dialog-field">
             <span className="label">Edit link — private, keep it safe</span>
-            <span className="link-box">{editUrl(session.publishedEditId)}</span>
+            <LinkBox label="Edit link — private, keep it safe" value={editUrl(session.publishedEditId)} />
             <button className="button button--small" onClick={() => setConfirmRotate(true)}>Replace edit link</button>
           </div>
           <div className="dialog-field">
