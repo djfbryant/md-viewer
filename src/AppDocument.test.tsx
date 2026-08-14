@@ -69,7 +69,7 @@ describe('basic anonymous documents', () => {
     expect(await screen.findByRole('dialog', { name: 'Expanded Mermaid diagram' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close diagram viewer' }));
 
-    fireEvent.click(screen.getByRole('button', { name: /publish/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     fireEvent.click(await screen.findByRole('button', { name: /open share link/i }));
     expect(await screen.findByText('Read only')).toBeInTheDocument();
     const readerDiagram = await screen.findByRole('img', { name: 'Mermaid diagram' });
@@ -85,10 +85,10 @@ describe('basic anonymous documents', () => {
 
     expect(screen.getByRole('heading', { name: 'Release notes' })).toBeInTheDocument();
     const previewMarkup = screen.getByLabelText('Document preview').querySelector('article')?.innerHTML;
-    fireEvent.click(screen.getByRole('button', { name: /publish/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
-    expect(await screen.findByRole('heading', { name: 'Your document is live' })).toBeInTheDocument();
-    expect(screen.getAllByText(/http:\/\/localhost\/s\/opaque-document-id/)).toHaveLength(2);
+    expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
+    expect(screen.getByText(/http:\/\/localhost\/s\/opaque-document-id/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
     expect(await screen.findByText('Read only')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Release notes' })).toBeInTheDocument();

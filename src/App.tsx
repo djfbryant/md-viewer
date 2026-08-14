@@ -1,14 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getShareId, sharePath, shareUrl } from './document';
 import { type SharedDocument } from './document-lifecycle';
+import { MAX_SPLIT, MIN_SPLIT, useEditorSession, useEditorSplit } from './editor-session';
 import { documentLifecycle } from './lib/instant-document-persistence';
 import { downloadMarkdown, interpretMarkdown, MarkdownView, type InterpretedMarkdown, type MermaidExpandRequest } from './markdown';
 import { MermaidViewer } from './mermaid-viewer';
 import { applyTheme, getStoredTheme, nextTheme, type ThemePreference, storeTheme } from './theme';
 
-const DEFAULT_SPLIT = 50;
-const MIN_SPLIT = 22;
-const MAX_SPLIT = 78;
 function ThemeButton({ preference, onCycle }: { preference: ThemePreference; onCycle: () => void }) {
   const symbol = preference === 'system' ? '◐' : preference === 'light' ? '☀' : '☾';
   return (
@@ -69,65 +67,21 @@ function Home({ preference, onCycle, onCreate }: { preference: ThemePreference; 
 
 function Editor({ preference, onCycle, onBack, onNavigate }: { preference: ThemePreference; onCycle: () => void; onBack: () => void; onNavigate: (path: string) => void }) {
   const [tab, setTab] = useState<'write' | 'preview'>('write');
-  const [split, setSplit] = useState(DEFAULT_SPLIT);
-  const [markdown, setMarkdown] = useState('');
-  const [isPublishing, setIsPublishing] = useState(false);
-  const [publishError, setPublishError] = useState<string | null>(null);
-  const [publishedId, setPublishedId] = useState<string | null>(null);
-  const panesRef = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
+  const session = useEditorSession(documentLifecycle.publish);
+  const split = useEditorSplit();
+  const { markdown } = session;
   const interpreted = useMemo(() => interpretMarkdown(markdown), [markdown]);
 
-  const applySplit = (next: number) => {
-    const clamped = Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, Math.round(next)));
-    panesRef.current?.style.setProperty('--split', `${clamped}%`);
-    return clamped;
-  };
-
-  const startDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
-    event.currentTarget.setPointerCapture(event.pointerId);
-    dragging.current = true;
-    document.body.classList.add('is-resizing');
-  };
-
-  const moveDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (!dragging.current || !panesRef.current) return;
-    const rect = panesRef.current.getBoundingClientRect();
-    applySplit(((event.clientX - rect.left) / rect.width) * 100);
-  };
-
-  const endDrag = () => {
-    if (!dragging.current || !panesRef.current) return;
-    dragging.current = false;
-    document.body.classList.remove('is-resizing');
-    setSplit(Number.parseFloat(panesRef.current.style.getPropertyValue('--split')) || DEFAULT_SPLIT);
-  };
-
-  const resetSplit = () => {
-    applySplit(DEFAULT_SPLIT);
-    setSplit(DEFAULT_SPLIT);
-  };
-
-  const resizeByKeyboard = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    const amount = event.shiftKey ? 10 : 2;
-    if (event.key === 'ArrowLeft') { event.preventDefault(); setSplit(applySplit(split - amount)); }
-    if (event.key === 'ArrowRight') { event.preventDefault(); setSplit(applySplit(split + amount)); }
-    if (event.key === 'Home') { event.preventDefault(); resetSplit(); }
-  };
-
-  const publish = async () => {
-    setIsPublishing(true);
-    setPublishError(null);
-    const outcome = await documentLifecycle.publish(markdown);
-    if (outcome.kind === 'published') {
-      setPublishedId(outcome.document.id);
-    } else if (outcome.kind === 'not-configured') {
-      setPublishError('Publishing needs an InstantDB app. Add VITE_INSTANT_APP_ID to publish this document.');
-    } else {
-      setPublishError('We could not publish this document. Please try again.');
-    }
-    setIsPublishing(false);
-  };
+  useEffect(() => {
+    const saveWithShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        if (!session.isSaving) void session.save();
+      }
+    };
+    window.addEventListener('keydown', saveWithShortcut);
+    return () => window.removeEventListener('keydown', saveWithShortcut);
+  }, [session]);
 
   return (
     <main className="editor-shell" data-tab={tab}>
@@ -135,11 +89,15 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
         <button className="brand brand-button" onClick={onBack} aria-label="Back to MarkShare home"><Brand /></button>
         <div className="document-title">
           <span>{markdown.trim() ? interpreted.title : 'New document'}</span>
-          <span className="pill pill--saved">Draft</span>
+          <span className={`pill ${session.hasUnsavedChanges ? 'pill--unsaved' : 'pill--saved'}`}>
+            {session.hasUnsavedChanges && <span className="dot" aria-hidden="true" />}
+            <span className="pill-text">{session.hasUnsavedChanges ? 'Unsaved changes' : 'Saved'}</span>
+          </span>
         </div>
         <div className="bar-actions">
           <ThemeButton preference={preference} onCycle={onCycle} />
-          <button className="button button--primary" onClick={publish} disabled={isPublishing}><span className="save-long">{isPublishing ? 'Publishing…' : 'Publish'}</span><span className="save-short">↗</span></button>
+          <label className="button import-button"><span>Import .md</span><input type="file" accept=".md,text/markdown,text/plain" onChange={session.importMarkdown} /></label>
+          <button className="button button--primary" onClick={() => void session.save()} disabled={session.isSaving}><span className="save-long">{session.isSaving ? 'Saving…' : 'Save changes'}</span><span className="save-short">Save</span></button>
         </div>
       </header>
       <nav className="tabs" aria-label="Document workspace">
@@ -148,20 +106,21 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
           <button className={tab === 'preview' ? 'active' : ''} onClick={() => setTab('preview')}>Preview</button>
         </div>
       </nav>
-      <div className="panes" ref={panesRef} style={{ '--split': `${split}%` } as React.CSSProperties}>
+      <div className="panes" ref={split.panesRef} style={{ '--split': `${split.split}%` } as React.CSSProperties}>
         <section className="pane pane-write" aria-label="Markdown editor">
           <div className="pane-head"><span className="label">Write</span></div>
-          <textarea aria-label="Markdown document" placeholder="# Start writing" spellCheck={false} value={markdown} onChange={(event) => setMarkdown(event.target.value)} />
+          <textarea aria-label="Markdown document" placeholder="# Start writing" spellCheck={false} value={markdown} onChange={(event) => session.setMarkdown(event.target.value)} />
         </section>
-        <button className="splitter" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} onDoubleClick={resetSplit} onKeyDown={resizeByKeyboard} role="separator" aria-orientation="vertical" aria-label="Resize the write and preview panes" aria-valuenow={Math.round(split)} aria-valuemin={MIN_SPLIT} aria-valuemax={MAX_SPLIT} title="Drag to resize · double-click to reset" />
+        <button className="splitter" onPointerDown={split.startDrag} onPointerMove={split.moveDrag} onPointerUp={split.finishDrag} onPointerCancel={split.finishDrag} onLostPointerCapture={split.finishDrag} onDoubleClick={split.resetSplit} onKeyDown={split.resizeByKeyboard} role="separator" aria-orientation="vertical" aria-label="Resize the write and preview panes" aria-valuenow={Math.round(split.split)} aria-valuemin={MIN_SPLIT} aria-valuemax={MAX_SPLIT} title="Drag to resize · double-click to reset" />
         <section className="pane pane-preview" aria-label="Document preview">
-          <div className="pane-head"><span className="label">Preview</span><span className="preview-note">matches share link</span></div>
+          <div className="pane-head"><span className="label">Preview</span><span className="preview-note">{session.hasUnsavedChanges ? 'not yet published' : 'matches share link'}</span></div>
           <div className="preview"><article className={markdown ? 'markdown' : 'preview-placeholder'}>{markdown ? <RenderedDocument document={interpreted} /> : <><h1>Your preview will appear here</h1><p>Write Markdown, then publish a read-only share link.</p></>}</article></div>
         </section>
       </div>
-      <footer className="status-footer"><span>{markdown.trim() ? `${markdown.trim().split(/\s+/).length} words` : 'Draft document'}</span><span className="status-url">{publishedId ? shareUrl(publishedId) : 'Publish to create a share link'}</span></footer>
-      {publishError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="publish-error-title"><h2 id="publish-error-title">Document not published</h2><p>{publishError}</p><button className="button button--primary" onClick={() => setPublishError(null)}>Done</button></section></div>}
-      {publishedId && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="dialog" aria-labelledby="published-title"><h2 id="published-title">Your document is live</h2><p>Anyone with this link can read it. No one can change it.</p><code className="link-box">{shareUrl(publishedId)}</code><div className="dialog-actions"><button className="button" onClick={() => setPublishedId(null)}>Done</button><button className="button button--primary" onClick={() => onNavigate(sharePath(publishedId))}>Open share link</button></div></section></div>}
+      <footer className="status-footer"><span>{markdown.trim() ? `${markdown.trim().split(/\s+/).length} words` : 'Draft document'}</span><span className="status-url">{session.publishedId ? shareUrl(session.publishedId) : 'Save to create a share link'}</span></footer>
+      {session.recoveredDraft && <div className="toast" role="status">Recovered unsaved local draft.<button className="toast-dismiss" onClick={session.dismissRecoveredDraft} aria-label="Dismiss recovery message">×</button></div>}
+      {session.saveError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="save-error-title"><h2 id="save-error-title">Document not saved</h2><p>{session.saveError}</p><button className="button button--primary" onClick={session.dismissSaveError}>Done</button></section></div>}
+      {session.savedNotice && session.publishedId && <div className="toast" role="status">Changes saved. <button className="toast-link" onClick={() => onNavigate(sharePath(session.publishedId!))}>Open share link</button></div>}
     </main>
   );
 }

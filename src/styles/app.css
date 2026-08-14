@@ -22,6 +22,8 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .button--primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.06); }
 .button--quiet { min-width: 34px; padding: 5px 9px; border-color: transparent; background: transparent; color: var(--ink-soft); }
 .button--small { min-height: 30px; font-size: var(--type-button-small-size); }
+.import-button { position: relative; }
+.import-button input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; }
 
 .home-shell, .editor-shell, .reader-shell { display: flex; flex-direction: column; height: 100%; min-height: 100dvh; max-height: 100dvh; }
 .home-content { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(300px, .7fr); align-items: center; gap: clamp(var(--space-8), 7vw, 120px); width: min(1120px, 100%); flex: 1; min-height: 0; margin: 0 auto; padding: var(--space-10) var(--space-8); }
@@ -111,7 +113,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .splitter:hover::after, .splitter:focus-visible::after { opacity: 0; }
 .status-footer { display: flex; align-items: center; gap: 14px; height: 32px; flex: none; padding: 0 var(--space-5); border-top: 1px solid var(--line); background: var(--surface); color: var(--ink-faint); font-size: var(--type-small-size); }
 .status-url { margin-left: auto; font-family: var(--mono); }
-.toast { position: fixed; bottom: 48px; left: 50%; z-index: 2; padding: 8px 13px; border-radius: 999px; background: var(--ink); color: var(--paper); box-shadow: var(--shadow); font-size: 12.5px; transform: translateX(-50%); }
+.toast { position: fixed; bottom: 48px; left: 50%; z-index: 2; display: flex; align-items: center; gap: 7px; padding: 8px 13px; border-radius: 999px; background: var(--ink); color: var(--paper); box-shadow: var(--shadow); font-size: 12.5px; transform: translateX(-50%); }.toast-link, .toast-dismiss { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: var(--weight-semibold); text-decoration: underline; }.toast-dismiss { font-size: 16px; line-height: 1; text-decoration: none; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 3; display: grid; place-items: center; padding: 20px; background: rgb(20 18 14 / .42); }
 .dialog { width: min(520px, 100%); padding: 24px; border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
 .dialog h2 { margin: 0 0 8px; font-size: 1.35rem; }.dialog p { margin: 0 0 18px; color: var(--ink-soft); }.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
