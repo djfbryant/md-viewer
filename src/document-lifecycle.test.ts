@@ -45,6 +45,9 @@ function memoryStore(): DocumentPersistence & DocumentRemovalStore & {
       }
       return 'uploaded';
     },
+    async listImageIds(documentId) {
+      return images.get(documentId) ?? [];
+    },
     useShareDocument(id) {
       const document = documents.get(id);
       return document ? { kind: 'available', document: withImages(document) } : { kind: 'unavailable' };
@@ -109,6 +112,7 @@ describe('Document lifecycle', () => {
     const persistence: DocumentPersistence = {
       save: vi.fn().mockRejectedValue(new Error('network error')),
       uploadImages: vi.fn(),
+      listImageIds: vi.fn().mockResolvedValue([]),
       useShareDocument: () => unavailable,
       useEditDocument: () => unavailable,
       markDeleted: vi.fn(),
@@ -123,6 +127,7 @@ describe('Document lifecycle', () => {
     const lifecycle = createDocumentLifecycle({
       save: async () => 'not-configured',
       uploadImages: async () => 'not-configured',
+      listImageIds: async () => [],
       useShareDocument: () => unavailable,
       useEditDocument: () => unavailable,
       markDeleted: async () => 'not-configured',
@@ -316,6 +321,25 @@ describe('Document lifecycle', () => {
     await expect(lifecycle.save('# Notes', undefined, {
       images: [{ id: 'pdf', file: new File(['x'], 'notes.pdf', { type: 'application/pdf' }) }],
     })).resolves.toEqual({ kind: 'failed' });
+  });
+
+  it('rejects a twenty-first image at save, including additions to an existing document', async () => {
+    const png = (id: string) => ({ id, file: new File(['x'], `${id}.png`, { type: 'image/png' }) });
+    const store = memoryStore();
+    const ids = ['opaque-document-id', 'private-edit-capability'];
+    const lifecycle = createDocumentLifecycle(store, () => ids.shift()!);
+
+    await expect(lifecycle.save('# Notes', undefined, {
+      images: Array.from({ length: 21 }, (_, index) => png(`batch-${index}`)),
+    })).resolves.toEqual({ kind: 'failed' });
+    expect(store.images.size).toBe(0);
+
+    const published = await lifecycle.save('# Notes', undefined, {
+      images: Array.from({ length: 20 }, (_, index) => png(`kept-${index}`)),
+    });
+    if (published.kind !== 'published') throw new Error('Expected save to succeed');
+    await expect(lifecycle.save('# Notes', published.document, { images: [png('extra')] })).resolves.toEqual({ kind: 'failed' });
+    expect(store.images.get(published.document.id)).toHaveLength(20);
   });
 
   it('publishes pasted images and serves their sources only while the document is available', async () => {

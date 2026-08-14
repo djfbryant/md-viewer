@@ -45,7 +45,7 @@ export function parseDocumentImageRef(url: string) {
 
 export function isInstantStorageUrl(url: string) {
   try {
-    const { hostname } = new URL(url);
+    const { hostname } = new URL(url.startsWith('//') ? `https:${url}` : url);
     return hostname === 'instant-storage.s3.amazonaws.com' || hostname.endsWith('.instant-storage.s3.amazonaws.com');
   } catch {
     return false;

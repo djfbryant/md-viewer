@@ -37,6 +37,15 @@ const instantDocumentPersistence: DocumentPersistence = {
     return 'uploaded';
   },
 
+  async listImageIds(documentId) {
+    if (!db) return [];
+    const { data } = await db.queryOnce(
+      { $files: { $: { where: { path: { $like: `${documentImagePrefix(documentId)}%` } } } } },
+      { ruleParams: { knownDocumentId: documentId } },
+    );
+    return imagesFor(documentId, data.$files).map((image) => image.id);
+  },
+
   useShareDocument(id): PersistedShareOutcome {
     if (!db) return { kind: 'unavailable' };
 

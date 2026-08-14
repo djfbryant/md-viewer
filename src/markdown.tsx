@@ -51,13 +51,13 @@ function titleFrom(tree: MdastRoot) {
 
 function safeUrl(url: string) {
   if (parseDocumentImageRef(url)) return url;
+  if (isInstantStorageUrl(url)) return undefined;
 
   const colon = url.indexOf(':');
   const relativeMarker = url.search(/[/?#]/);
   if (colon < 0 || (relativeMarker >= 0 && relativeMarker < colon)) return url;
 
   const protocol = url.slice(0, colon).toLowerCase();
-  if (isInstantStorageUrl(url)) return undefined;
   return ['http', 'https', 'irc', 'ircs', 'mailto', 'xmpp'].includes(protocol) ? url : undefined;
 }
 
@@ -425,6 +425,7 @@ function usePrivateImageSrc(src: string | undefined) {
       setRemoteSrc(undefined);
       return;
     }
+    setRemoteSrc(undefined);
     let objectUrl: string | undefined;
     let cancelled = false;
     fetch(src)

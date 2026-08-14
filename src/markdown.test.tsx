@@ -135,6 +135,13 @@ describe('Markdown interpretation', () => {
     expect(screen.getByText('leaked')).toBeInTheDocument();
     leaked.unmount();
 
+    const protocolRelative = render(<MarkdownView document={interpretMarkdown(
+      '![leaked](//instant-storage.s3.amazonaws.com/apps/secret/photo.png)',
+    )} />);
+    expect(protocolRelative.container.querySelector('img')).toBeNull();
+    expect(screen.getByText('leaked')).toBeInTheDocument();
+    protocolRelative.unmount();
+
     const { container } = render(<MarkdownView document={interpretMarkdown(
       '![safe remote](https://cdn.example.com/photo.png)',
     )} />);

@@ -1,4 +1,4 @@
-import { attachDocumentImage, isSupportedImageType, MAX_IMAGE_BYTES, type AttachImageOutcome, type ImageInput } from './document-image';
+import { attachDocumentImage, isSupportedImageType, MAX_IMAGE_BYTES, MAX_IMAGES_PER_DOCUMENT, type AttachImageOutcome, type ImageInput } from './document-image';
 import { interpretMarkdown } from './markdown';
 
 export type InstantDate = Date | number | string;
@@ -100,6 +100,7 @@ export type RemovableDocument = {
 export interface DocumentPersistence {
   save(document: StoredDocument): Promise<'published' | 'not-configured'>;
   uploadImages(documentId: string, images: PendingDocumentImage[]): Promise<'uploaded' | 'not-configured'>;
+  listImageIds(documentId: string): Promise<string[]>;
   useShareDocument(id: string): PersistedShareOutcome;
   useEditDocument(editId: string): PersistedShareOutcome;
   markDeleted(id: string, editId: string, deletedAt: Date): Promise<'deleted' | 'not-configured'>;
@@ -161,6 +162,11 @@ export function createDocumentLifecycle(
       try {
         if (options?.images?.length) {
           if (options.images.some((image) => image.file.size > MAX_IMAGE_BYTES || !isSupportedImageType(image.file.type))) {
+            return { kind: 'failed' };
+          }
+          const storedIds = existing ? await persistence.listImageIds(existing.id) : [];
+          const stored = new Set(storedIds);
+          if (stored.size + options.images.filter((image) => !stored.has(image.id)).length > MAX_IMAGES_PER_DOCUMENT) {
             return { kind: 'failed' };
           }
           const uploaded = await persistence.uploadImages(id, options.images);
