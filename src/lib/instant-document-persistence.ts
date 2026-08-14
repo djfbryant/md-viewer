@@ -2,12 +2,13 @@ import { createDocumentLifecycle, type DocumentPersistence, type ShareDocumentOu
 import { createDocumentId, db } from './instant';
 
 const instantDocumentPersistence: DocumentPersistence = {
-  async publish(document) {
+  async save(document) {
     if (!db) return 'not-configured';
 
-    await db.transact(db.tx.documents[document.id].ruleParams({ knownDocumentId: document.id }).update({
+    await db.transact(db.tx.documents[document.id].ruleParams({ knownDocumentId: document.id, editId: document.editId }).update({
       title: document.title,
       markdown: document.markdown,
+      editId: document.editId,
       createdAt: document.createdAt,
       updatedAt: document.updatedAt,
     }));

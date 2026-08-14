@@ -13,8 +13,8 @@ const mermaidApi = vi.hoisted(() => ({
 
 vi.mock('./lib/instant-document-persistence', () => ({
   documentLifecycle: {
-    publish: vi.fn(async (markdown: string) => {
-      const document = { id: 'opaque-document-id', title: markdown.startsWith('# ') ? markdown.split('\n')[0].slice(2) : 'Untitled document', markdown };
+    save: vi.fn(async (markdown: string) => {
+      const document = { id: 'opaque-document-id', editId: 'private-edit-capability', title: markdown.startsWith('# ') ? markdown.split('\n')[0].slice(2) : 'Untitled document', markdown };
       documents.push(document);
       return { kind: 'published', document };
     }),

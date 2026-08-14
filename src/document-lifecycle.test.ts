@@ -5,7 +5,7 @@ function memoryPersistence(): DocumentPersistence & { documents: Map<string, { i
   const documents = new Map<string, { id: string; title: string; markdown: string }>();
   return {
     documents,
-    async publish(document) { documents.set(document.id, document); return 'published'; },
+    async save(document) { documents.set(document.id, document); return 'published'; },
     useShareDocument(id) {
       const document = documents.get(id);
       return document ? { kind: 'available', document } : { kind: 'unavailable' };
@@ -16,13 +16,14 @@ function memoryPersistence(): DocumentPersistence & { documents: Map<string, { i
 describe('Document lifecycle', () => {
   it('publishes a titled document that a holder of its share ID can read', async () => {
     const persistence = memoryPersistence();
-    const lifecycle = createDocumentLifecycle(persistence, () => 'opaque-document-id', () => new Date('2026-08-13T12:00:00Z'));
+    const ids = ['opaque-document-id', 'private-edit-capability'];
+    const lifecycle = createDocumentLifecycle(persistence, () => ids.shift()!, () => new Date('2026-08-13T12:00:00Z'));
 
-    const published = await lifecycle.publish('# Release notes\n\nHello **reader**.');
+    const published = await lifecycle.save('# Release notes\n\nHello **reader**.');
 
     expect(published).toEqual({
       kind: 'published',
-      document: { id: 'opaque-document-id', title: 'Release notes', markdown: '# Release notes\n\nHello **reader**.' },
+      document: { id: 'opaque-document-id', editId: 'private-edit-capability', title: 'Release notes', markdown: '# Release notes\n\nHello **reader**.' },
     });
     expect(lifecycle.useShareDocument('opaque-document-id')).toEqual({
       kind: 'available',
@@ -37,20 +38,35 @@ describe('Document lifecycle', () => {
 
   it('translates a persistence failure to a generic publish failure', async () => {
     const persistence: DocumentPersistence = {
-      publish: vi.fn().mockRejectedValue(new Error('network error')),
+      save: vi.fn().mockRejectedValue(new Error('network error')),
       useShareDocument: () => ({ kind: 'unavailable' }),
     };
     const lifecycle = createDocumentLifecycle(persistence, () => 'opaque-document-id');
 
-    await expect(lifecycle.publish('Text')).resolves.toEqual({ kind: 'failed' });
+    await expect(lifecycle.save('Text')).resolves.toEqual({ kind: 'failed' });
   });
 
   it('keeps a missing database configuration distinct from a failed publish', async () => {
     const lifecycle = createDocumentLifecycle({
-      publish: async () => 'not-configured',
+      save: async () => 'not-configured',
       useShareDocument: () => ({ kind: 'unavailable' }),
     }, () => 'opaque-document-id');
 
-    await expect(lifecycle.publish('Text')).resolves.toEqual({ kind: 'not-configured' });
+    await expect(lifecycle.save('Text')).resolves.toEqual({ kind: 'not-configured' });
+  });
+
+  it('updates the existing document when the owner saves a revision', async () => {
+    const persistence = memoryPersistence();
+    const lifecycle = createDocumentLifecycle(persistence, () => 'opaque-document-id');
+    const first = await lifecycle.save('# First version');
+    if (first.kind !== 'published') throw new Error('Expected initial save to succeed');
+
+    const revised = await lifecycle.save('# Revised version', first.document);
+
+    expect(revised).toMatchObject({ kind: 'published', document: { id: 'opaque-document-id', markdown: '# Revised version' } });
+    expect(lifecycle.useShareDocument('opaque-document-id')).toEqual({
+      kind: 'available',
+      document: { id: 'opaque-document-id', title: 'Revised version', markdown: '# Revised version' },
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import type { PublishDocumentOutcome } from './document-lifecycle';
+import type { EditCapability, SaveDocumentOutcome } from './document-lifecycle';
 
 const RECOVERY_KEY = 'markshare-editor-recovery-v1';
 const DEFAULT_SPLIT = 50;
@@ -10,23 +10,25 @@ type Recovery = {
   markdown: string;
   publishedMarkdown: string;
   publishedId: string | null;
+  publishedEditId: string | null;
 };
 
 function readRecovery(): Recovery {
   try {
     const raw = window.localStorage.getItem(RECOVERY_KEY);
-    if (!raw) return { markdown: '', publishedMarkdown: '', publishedId: null };
+    if (!raw) return { markdown: '', publishedMarkdown: '', publishedId: null, publishedEditId: null };
     const parsed = JSON.parse(raw) as Partial<Recovery>;
     if (typeof parsed.markdown !== 'string' || typeof parsed.publishedMarkdown !== 'string') {
-      return { markdown: '', publishedMarkdown: '', publishedId: null };
+      return { markdown: '', publishedMarkdown: '', publishedId: null, publishedEditId: null };
     }
     return {
       markdown: parsed.markdown,
       publishedMarkdown: parsed.publishedMarkdown,
       publishedId: typeof parsed.publishedId === 'string' ? parsed.publishedId : null,
+      publishedEditId: typeof parsed.publishedEditId === 'string' ? parsed.publishedEditId : null,
     };
   } catch {
-    return { markdown: '', publishedMarkdown: '', publishedId: null };
+    return { markdown: '', publishedMarkdown: '', publishedId: null, publishedEditId: null };
   }
 }
 
@@ -42,11 +44,12 @@ function persistRecovery(recovery: Recovery) {
   }
 }
 
-export function useEditorSession(publish: (markdown: string) => Promise<PublishDocumentOutcome>) {
+export function useEditorSession(saveDocument: (markdown: string, existing?: EditCapability) => Promise<SaveDocumentOutcome>) {
   const recovery = useRef(readRecovery()).current;
   const [markdown, setMarkdown] = useState(recovery.markdown);
   const [publishedMarkdown, setPublishedMarkdown] = useState(recovery.publishedMarkdown);
   const [publishedId, setPublishedId] = useState(recovery.publishedId);
+  const [publishedEditId, setPublishedEditId] = useState(recovery.publishedEditId);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [recoveredDraft, setRecoveredDraft] = useState(Boolean(recovery.markdown && recovery.markdown !== recovery.publishedMarkdown));
@@ -55,8 +58,8 @@ export function useEditorSession(publish: (markdown: string) => Promise<PublishD
   const hasUnsavedChanges = markdown !== publishedMarkdown;
 
   useEffect(() => {
-    persistRecovery({ markdown, publishedMarkdown, publishedId });
-  }, [markdown, publishedId, publishedMarkdown]);
+    persistRecovery({ markdown, publishedMarkdown, publishedId, publishedEditId });
+  }, [markdown, publishedEditId, publishedId, publishedMarkdown]);
 
   useEffect(() => {
     if (!savedNotice) return;
@@ -64,13 +67,23 @@ export function useEditorSession(publish: (markdown: string) => Promise<PublishD
     return () => window.clearTimeout(timeout);
   }, [savedNotice]);
 
+  useEffect(() => {
+    if (!recoveredDraft) return;
+    const timeout = window.setTimeout(() => setRecoveredDraft(false), 1900);
+    return () => window.clearTimeout(timeout);
+  }, [recoveredDraft]);
+
   const save = useCallback(async () => {
     setIsSaving(true);
     setSaveError(null);
-    const outcome = await publish(markdown);
+    const existing = publishedId && publishedEditId
+      ? { id: publishedId, editId: publishedEditId }
+      : undefined;
+    const outcome = await saveDocument(markdown, existing);
     if (outcome.kind === 'published') {
       setPublishedMarkdown(outcome.document.markdown);
       setPublishedId(outcome.document.id);
+      setPublishedEditId(outcome.document.editId);
       setRecoveredDraft(false);
       setSavedNotice(true);
     } else if (outcome.kind === 'not-configured') {
@@ -80,7 +93,7 @@ export function useEditorSession(publish: (markdown: string) => Promise<PublishD
     }
     setIsSaving(false);
     return outcome;
-  }, [markdown, publish]);
+  }, [markdown, publishedEditId, publishedId, saveDocument]);
 
   const importMarkdown = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];

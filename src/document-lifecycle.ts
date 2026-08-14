@@ -6,28 +6,34 @@ export type SharedDocument = {
   markdown: string;
 };
 
+export type EditableDocument = SharedDocument & {
+  editId: string;
+};
+
+export type EditCapability = Pick<EditableDocument, 'id' | 'editId'>;
+
 export type ShareDocumentOutcome =
   | { kind: 'loading' }
   | { kind: 'unavailable' }
   | { kind: 'available'; document: SharedDocument };
 
-export type PublishDocumentOutcome =
-  | { kind: 'published'; document: SharedDocument }
+export type SaveDocumentOutcome =
+  | { kind: 'published'; document: EditableDocument }
   | { kind: 'not-configured' }
   | { kind: 'failed' };
 
-type StoredDocument = SharedDocument & {
+type StoredDocument = EditableDocument & {
   createdAt: Date;
   updatedAt: Date;
 };
 
 export interface DocumentPersistence {
-  publish(document: StoredDocument): Promise<'published' | 'not-configured'>;
+  save(document: StoredDocument): Promise<'published' | 'not-configured'>;
   useShareDocument(id: string): ShareDocumentOutcome;
 }
 
 export interface DocumentLifecycle {
-  publish(markdown: string): Promise<PublishDocumentOutcome>;
+  save(markdown: string, existing?: EditCapability): Promise<SaveDocumentOutcome>;
   useShareDocument(id: string): ShareDocumentOutcome;
 }
 
@@ -37,12 +43,13 @@ export function createDocumentLifecycle(
   now: () => Date = () => new Date(),
 ): DocumentLifecycle {
   return {
-    async publish(markdown) {
-      const id = generateId();
+    async save(markdown, existing) {
+      const id = existing?.id ?? generateId();
       const timestamp = now();
       const interpreted = interpretMarkdown(markdown);
       const document = {
         id,
+        editId: existing?.editId ?? generateId(),
         title: interpreted.title,
         markdown,
         createdAt: timestamp,
@@ -50,11 +57,11 @@ export function createDocumentLifecycle(
       };
 
       try {
-        const result = await persistence.publish(document);
+        const result = await persistence.save(document);
         if (result === 'not-configured') return { kind: 'not-configured' };
         return {
           kind: 'published',
-          document: { id: document.id, title: document.title, markdown: document.markdown },
+          document: { id: document.id, editId: document.editId, title: document.title, markdown: document.markdown },
         };
       } catch {
         return { kind: 'failed' };

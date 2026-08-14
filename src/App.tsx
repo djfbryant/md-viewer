@@ -67,7 +67,7 @@ function Home({ preference, onCycle, onCreate }: { preference: ThemePreference; 
 
 function Editor({ preference, onCycle, onBack, onNavigate }: { preference: ThemePreference; onCycle: () => void; onBack: () => void; onNavigate: (path: string) => void }) {
   const [tab, setTab] = useState<'write' | 'preview'>('write');
-  const session = useEditorSession(documentLifecycle.publish);
+  const session = useEditorSession(documentLifecycle.save);
   const split = useEditorSplit();
   const { markdown } = session;
   const interpreted = useMemo(() => interpretMarkdown(markdown), [markdown]);

@@ -2,14 +2,15 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const documents = vi.hoisted(() => new Map<string, { id: string; title: string; markdown: string }>());
+const publishDocument = vi.hoisted(() => vi.fn(async (markdown: string, existing?: { id: string; editId: string }): Promise<{ kind: 'published'; document: { id: string; editId: string; title: string; markdown: string } } | { kind: 'failed' }> => {
+  const document = { id: existing?.id ?? 'saved-document', editId: existing?.editId ?? 'private-edit-capability', title: 'Saved document', markdown };
+  documents.set(document.id, document);
+  return { kind: 'published' as const, document };
+}));
 
 vi.mock('./lib/instant-document-persistence', () => ({
   documentLifecycle: {
-    publish: vi.fn(async (markdown: string) => {
-      const document = { id: 'saved-document', title: 'Saved document', markdown };
-      documents.set(document.id, document);
-      return { kind: 'published', document };
-    }),
+    save: publishDocument,
     useShareDocument: (id: string) => {
       const document = documents.get(id);
       return document ? { kind: 'available', document } : { kind: 'unavailable' };
@@ -34,6 +35,7 @@ beforeEach(() => {
   window.matchMedia = vi.fn().mockImplementation(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
   window.history.replaceState({}, '', '/new');
   documents.clear();
+  publishDocument.mockClear();
 });
 
 afterEach(() => {
@@ -71,6 +73,15 @@ describe('editor session', () => {
 
     expect(await screen.findByRole('heading', { name: 'Imported' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Private revision' })).not.toBeInTheDocument();
+
+    window.history.replaceState({}, '', '/new');
+    fireEvent.popState(window);
+    expect(await screen.findByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Private revision');
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+    expect(publishDocument).toHaveBeenLastCalledWith('# Private revision', expect.objectContaining({ id: 'saved-document', editId: 'private-edit-capability' }));
+    fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
+    expect(await screen.findByRole('heading', { name: 'Private revision' })).toBeInTheDocument();
   });
 
   it('clamps, resets, and cleans up the accessible splitter interaction', () => {
@@ -89,5 +100,29 @@ describe('editor session', () => {
     expect(splitter).toHaveAttribute('aria-valuenow', '68');
     fireEvent.doubleClick(splitter);
     expect(splitter).toHaveAttribute('aria-valuenow', '50');
+  });
+
+  it('keeps editing available after a save failure and retries on the next explicit save', async () => {
+    publishDocument.mockResolvedValueOnce({ kind: 'failed' });
+    render(<App />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Retry me' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('We could not save this document. Please try again.');
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
+    expect(publishDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('switches between the edit and preview tabs without replacing the draft', () => {
+    render(<App />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Tabs' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+
+    expect(screen.getByRole('main')).toHaveAttribute('data-tab', 'preview');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Tabs');
   });
 });

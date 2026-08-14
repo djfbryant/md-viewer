@@ -1,11 +1,12 @@
 import { i } from '@instantdb/react';
 
 // The document ID is generated client-side as the opaque share capability.
-// Edit capabilities, images, expiry, and moderation metadata arrive later.
+// The edit ID remains private to the editor session; it is not part of a Share Link.
 const schema = i.graph({
   documents: i.entity({
     title: i.string(),
     markdown: i.string(),
+    editId: i.string(),
     createdAt: i.date(),
     updatedAt: i.date(),
   }),
