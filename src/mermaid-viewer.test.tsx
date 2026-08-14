@@ -131,9 +131,18 @@ describe('MermaidViewer', () => {
   });
 
   it('cleans up its document state when unmounted while open', () => {
+    const disconnect = vi.fn();
+    class ResizeObserverMock {
+      disconnect = disconnect;
+      observe() {}
+      unobserve() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+
     const rendered = render(<MermaidViewer onClose={vi.fn()} open svg={diagram} />);
     rendered.unmount();
     act(() => {});
+    expect(disconnect).toHaveBeenCalledTimes(1);
     expect(document.body.style.overflow).toBe('');
     expect(document.getElementById('root')).not.toHaveAttribute('aria-hidden');
   });
