@@ -96,7 +96,7 @@ function insertSnippet(markdown: string, snippet: string, start: number, end: nu
 }
 
 type PendingImage = {
-  file: File;
+  file?: File;
   id: string;
   previewUrl: string;
   uploaded: boolean;
@@ -192,7 +192,9 @@ export function useEditorSession(
     setSaveError(null);
     const nextExpiry = options && 'expiresAt' in options ? options.expiresAt ?? null : expiresAt;
     try {
-      const images = pendingImages.filter((image) => !image.uploaded).map((image) => ({ id: image.id, file: image.file }));
+      const images = pendingImages
+        .filter((image): image is PendingImage & { file: File } => !image.uploaded && Boolean(image.file))
+        .map((image) => ({ id: image.id, file: image.file }));
       const outcome = await lifecycle.save(markdown, capability, {
         expiresAt: nextExpiry,
         ...(images.length ? { images } : {}),
@@ -206,7 +208,7 @@ export function useEditorSession(
         setRecoveredDraft(false);
         setSavedNotice(true);
         rememberEditAccess(outcome.document.id, outcome.document.editId);
-        setPendingImages((current) => current.map((image) => ({ ...image, uploaded: true })));
+        setPendingImages((current) => current.map((image) => ({ id: image.id, previewUrl: image.previewUrl, uploaded: true })));
         if (!capability) persistRecovery(null, emptyRecovery);
       } else if (outcome.kind === 'not-configured') {
         setSaveError('Saving needs an InstantDB app. Add VITE_INSTANT_APP_ID to save this document.');

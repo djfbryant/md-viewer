@@ -420,18 +420,19 @@ function isLocalImageSrc(src: string) {
   return src.startsWith('blob:') || src.startsWith('data:');
 }
 
-function usePrivateImageSrc(src: string | undefined) {
-  const [remoteSrc, setRemoteSrc] = useState<string | undefined>();
-  const localFallback = useRef<string | undefined>(undefined);
+function usePrivateImageSrc(src: string | undefined, imageId?: string) {
+  const [remote, setRemote] = useState<{ id?: string; url?: string }>({});
+  const fallback = useRef<{ id?: string; url?: string }>({});
 
-  if (src && isLocalImageSrc(src)) localFallback.current = src;
-  if (!src) localFallback.current = undefined;
+  if (fallback.current.id !== imageId) fallback.current = { id: imageId };
+  if (src && isLocalImageSrc(src)) fallback.current = { id: imageId, url: src };
 
   useEffect(() => {
     if (!src || isLocalImageSrc(src)) {
-      setRemoteSrc(undefined);
+      setRemote({});
       return;
     }
+    setRemote({});
     let objectUrl: string | undefined;
     let cancelled = false;
     fetch(src)
@@ -442,26 +443,26 @@ function usePrivateImageSrc(src: string | undefined) {
       .then((blob) => {
         if (cancelled) return;
         objectUrl = URL.createObjectURL(blob);
-        setRemoteSrc(objectUrl);
+        setRemote({ id: imageId, url: objectUrl });
       })
       .catch(() => {
-        if (!cancelled) setRemoteSrc(undefined);
+        if (!cancelled) setRemote({});
       });
     return () => {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [src]);
+  }, [src, imageId]);
 
   if (!src) return undefined;
   if (isLocalImageSrc(src)) return src;
-  return remoteSrc ?? localFallback.current;
+  return (remote.id === imageId ? remote.url : undefined) ?? fallback.current.url;
 }
 
 function MarkdownImage({ alt, src, ...props }: { alt?: string; src?: string } & Record<string, unknown>) {
   const imageSources = useContext(DocumentImageContext);
   const imageId = typeof src === 'string' ? parseDocumentImageRef(src) : undefined;
-  const privateSrc = usePrivateImageSrc(imageId ? imageSources[imageId] : undefined);
+  const privateSrc = usePrivateImageSrc(imageId ? imageSources[imageId] : undefined, imageId);
   if (imageId) return privateSrc ? <img alt={alt ?? ''} src={privateSrc} {...props} /> : <span>{alt}</span>;
   return src ? <img alt={alt ?? ''} src={src} {...props} /> : <span>{alt}</span>;
 }

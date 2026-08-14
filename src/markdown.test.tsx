@@ -206,6 +206,72 @@ describe('Markdown interpretation', () => {
     expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-preview');
   });
 
+  it('does not show a previous image preview when the slot changes image id', () => {
+    const first = interpretMarkdown('![a.png](markshare-image:img-1)');
+    const { rerender } = render(<MarkdownView
+      document={first}
+      imageSources={{ 'img-1': 'blob:preview-1' }}
+    />);
+    expect(screen.getByRole('img', { name: 'a.png' })).toHaveAttribute('src', 'blob:preview-1');
+
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => undefined)));
+    const second = interpretMarkdown('![b.png](markshare-image:img-2)');
+    rerender(<MarkdownView
+      document={second}
+      imageSources={{ 'img-2': 'https://instant-storage.s3.amazonaws.com/apps/secret/b.png' }}
+    />);
+
+    expect(screen.queryByRole('img', { name: 'a.png' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'b.png' })?.getAttribute('src')).not.toBe('blob:preview-1');
+  });
+
+  it('does not show a previous fetched image when the slot changes image id', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([1]), { headers: { 'Content-Type': 'image/png' } })));
+    vi.spyOn(URL, 'createObjectURL').mockReturnValueOnce('blob:fetched-a').mockReturnValue('blob:fetched-b');
+    const first = interpretMarkdown('![a.png](markshare-image:img-1)');
+    const { rerender } = render(<MarkdownView
+      document={first}
+      imageSources={{ 'img-1': 'https://instant-storage.s3.amazonaws.com/apps/secret/a.png' }}
+    />);
+    expect(await screen.findByRole('img', { name: 'a.png' })).toHaveAttribute('src', 'blob:fetched-a');
+
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => undefined)));
+    const second = interpretMarkdown('![b.png](markshare-image:img-2)');
+    rerender(<MarkdownView
+      document={second}
+      imageSources={{ 'img-2': 'https://instant-storage.s3.amazonaws.com/apps/secret/b.png' }}
+    />);
+    expect(screen.queryByRole('img', { name: 'b.png' })?.getAttribute('src')).not.toBe('blob:fetched-a');
+  });
+
+  it('does not keep a revoked object URL when the stored Instant URL changes', async () => {
+    const document = interpretMarkdown('![sketch.png](markshare-image:img-1)');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([1]), { headers: { 'Content-Type': 'image/png' } })));
+    vi.spyOn(URL, 'createObjectURL').mockReturnValueOnce('blob:obj-1').mockReturnValue('blob:obj-2');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+
+    const { rerender } = render(<MarkdownView
+      document={document}
+      imageSources={{ 'img-1': 'https://instant-storage.s3.amazonaws.com/apps/secret/a.png?sig=1' }}
+    />);
+    expect(await screen.findByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:obj-1');
+
+    let complete: (response: Response) => void = () => undefined;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => {
+      complete = resolve;
+    })));
+    rerender(<MarkdownView
+      document={document}
+      imageSources={{ 'img-1': 'https://instant-storage.s3.amazonaws.com/apps/secret/a.png?sig=2' }}
+    />);
+
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:obj-1');
+    expect(screen.queryByRole('img', { name: 'sketch.png' })?.getAttribute('src')).not.toBe('blob:obj-1');
+
+    complete(new Response(new Uint8Array([2]), { headers: { 'Content-Type': 'image/png' } }));
+    expect(await screen.findByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:obj-2');
+  });
+
   it('renders Mermaid through the strict policy and falls back safely for invalid diagrams', async () => {
     const valid = render(<MarkdownView document={interpretMarkdown('```mermaid\ngraph TD\nA-->B\n```')} />);
 
