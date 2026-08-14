@@ -19,7 +19,7 @@ const rules = {
       view: "data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/')",
       create: "data.path.startsWith('documents/')",
       update: 'false',
-      delete: 'false',
+      delete: "data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/') && ruleParams.editId != null",
     },
   },
 } satisfies InstantRules;

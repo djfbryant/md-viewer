@@ -127,7 +127,10 @@ export function useEditorSession(
   const [savedNotice, setSavedNotice] = useState(false);
   const activeEditId = useRef<string | null>(existing?.editId ?? recovery.publishedEditId);
   const pendingImagesRef = useRef<PendingImage[]>([]);
-  pendingImagesRef.current = pendingImages;
+
+  useEffect(() => {
+    pendingImagesRef.current = pendingImages;
+  }, [pendingImages]);
 
   useEffect(() => () => {
     pendingImagesRef.current.forEach((image) => URL.revokeObjectURL(image.previewUrl));
@@ -169,6 +172,15 @@ export function useEditorSession(
   useEffect(() => {
     persistRecovery(publishedEditId ?? routeEditId ?? null, { markdown, publishedMarkdown, publishedId, publishedEditId });
   }, [markdown, publishedEditId, publishedId, publishedMarkdown, routeEditId]);
+
+  useEffect(() => {
+    const sources = existing?.imageSources;
+    if (!sources) return;
+    const dropping = pendingImagesRef.current.filter((image) => sources[image.id]);
+    if (!dropping.length) return;
+    dropping.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+    setPendingImages((current) => current.filter((image) => !sources[image.id]));
+  }, [existing?.imageSources]);
 
   useEffect(() => {
     if (!savedNotice) return;

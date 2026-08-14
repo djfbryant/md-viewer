@@ -316,6 +316,7 @@ describe('basic anonymous documents', () => {
 
   it('pastes a private image into the editor and renders it on the share link', async () => {
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     const editor = screen.getByRole('textbox', { name: /markdown document/i }) as HTMLTextAreaElement;
@@ -332,7 +333,11 @@ describe('basic anonymous documents', () => {
     expect(screen.getByText('1/20 images')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /open share link/i }));
+    expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:pasted-preview');
+    expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-image-1');
+
+    fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
     expect(await screen.findByText('Read only')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-image-1');
   });

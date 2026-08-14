@@ -45,6 +45,12 @@ function memoryStore(): DocumentPersistence & DocumentRemovalStore & {
       }
       return 'uploaded';
     },
+    async removeImages(documentId, imageIds) {
+      const remaining = (images.get(documentId) ?? []).filter((id) => !imageIds.includes(id));
+      if (remaining.length) images.set(documentId, remaining);
+      else images.delete(documentId);
+      for (const id of imageIds) imageUrls.delete(id);
+    },
     async listImageIds(documentId) {
       return images.get(documentId) ?? [];
     },
@@ -112,6 +118,7 @@ describe('Document lifecycle', () => {
     const persistence: DocumentPersistence = {
       save: vi.fn().mockRejectedValue(new Error('network error')),
       uploadImages: vi.fn(),
+      removeImages: vi.fn(),
       listImageIds: vi.fn().mockResolvedValue([]),
       useShareDocument: () => unavailable,
       useEditDocument: () => unavailable,
@@ -127,6 +134,7 @@ describe('Document lifecycle', () => {
     const lifecycle = createDocumentLifecycle({
       save: async () => 'not-configured',
       uploadImages: async () => 'not-configured',
+      removeImages: async () => undefined,
       listImageIds: async () => [],
       useShareDocument: () => unavailable,
       useEditDocument: () => unavailable,
@@ -340,6 +348,46 @@ describe('Document lifecycle', () => {
     if (published.kind !== 'published') throw new Error('Expected save to succeed');
     await expect(lifecycle.save('# Notes', published.document, { images: [png('extra')] })).resolves.toEqual({ kind: 'failed' });
     expect(store.images.get(published.document.id)).toHaveLength(20);
+  });
+
+  it('removes uploaded images when a later persist fails', async () => {
+    const store = memoryStore();
+    const persistence: DocumentPersistence = {
+      ...store,
+      save: async () => {
+        throw new Error('persist failed');
+      },
+    };
+    const lifecycle = createDocumentLifecycle(persistence, () => 'opaque-document-id');
+
+    await expect(lifecycle.save('# Notes', undefined, {
+      images: [{ id: 'pasted-image', file: new File(['x'], 'sketch.png', { type: 'image/png' }) }],
+    })).resolves.toEqual({ kind: 'failed' });
+    expect(store.images.size).toBe(0);
+    expect(store.imageUrls.size).toBe(0);
+  });
+
+  it('removes earlier images when a later upload fails', async () => {
+    const store = memoryStore();
+    let uploads = 0;
+    const persistence: DocumentPersistence = {
+      ...store,
+      uploadImages: async (documentId, uploaded, editId) => {
+        uploads += 1;
+        if (uploads === 2) throw new Error('upload failed');
+        return store.uploadImages(documentId, uploaded, editId);
+      },
+    };
+    const lifecycle = createDocumentLifecycle(persistence, () => 'opaque-document-id');
+
+    await expect(lifecycle.save('# Notes', undefined, {
+      images: [
+        { id: 'first-image', file: new File(['x'], 'first.png', { type: 'image/png' }) },
+        { id: 'second-image', file: new File(['x'], 'second.png', { type: 'image/png' }) },
+      ],
+    })).resolves.toEqual({ kind: 'failed' });
+    expect(store.images.size).toBe(0);
+    expect(store.imageUrls.size).toBe(0);
   });
 
   it('publishes pasted images and serves their sources only while the document is available', async () => {

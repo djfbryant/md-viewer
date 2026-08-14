@@ -16,6 +16,6 @@ describe('document permissions', () => {
     expect(rules.$files.allow.view).toBe("data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/')");
     expect(rules.$files.allow.create).toBe("data.path.startsWith('documents/')");
     expect(rules.$files.allow.update).toBe('false');
-    expect(rules.$files.allow.delete).toBe('false');
+    expect(rules.$files.allow.delete).toBe("data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/') && ruleParams.editId != null");
   });
 });

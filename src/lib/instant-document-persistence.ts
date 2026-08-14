@@ -1,3 +1,4 @@
+import { lookup } from '@instantdb/react';
 import { documentImagePath, documentImagePrefix, imageIdFromPath } from '../document-image';
 import { createDocumentLifecycle, type DocumentPersistence, type PersistedImage, type PersistedShareOutcome } from '../document-lifecycle';
 import { createDocumentId, db } from './instant';
@@ -26,15 +27,35 @@ const instantDocumentPersistence: DocumentPersistence = {
     return 'published';
   },
 
-  async uploadImages(documentId, images) {
+  async uploadImages(documentId, images, editId) {
     if (!db) return 'not-configured';
-    for (const image of images) {
-      await db.storage.uploadFile(documentImagePath(documentId, image.id), image.file, {
-        contentDisposition: 'inline',
-        contentType: image.file.type || 'application/octet-stream',
-      });
+    const uploaded: string[] = [];
+    try {
+      for (const image of images) {
+        await db.storage.uploadFile(documentImagePath(documentId, image.id), image.file, {
+          contentDisposition: 'inline',
+          contentType: image.file.type || 'application/octet-stream',
+        });
+        uploaded.push(image.id);
+      }
+      return 'uploaded';
+    } catch (error) {
+      try {
+        await instantDocumentPersistence.removeImages(documentId, uploaded, editId);
+      } catch {
+        // Compensation is best-effort; document cleanup still removes leftovers.
+      }
+      throw error;
     }
-    return 'uploaded';
+  },
+
+  async removeImages(documentId, imageIds, editId) {
+    if (!db || !imageIds.length) return;
+    await db.transact(imageIds.map((imageId) => (
+      db.tx.$files[lookup('path', documentImagePath(documentId, imageId))]
+        .ruleParams({ knownDocumentId: documentId, editId })
+        .delete()
+    )));
   },
 
   async listImageIds(documentId) {

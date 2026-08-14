@@ -99,7 +99,8 @@ export type RemovableDocument = {
 
 export interface DocumentPersistence {
   save(document: StoredDocument): Promise<'published' | 'not-configured'>;
-  uploadImages(documentId: string, images: PendingDocumentImage[]): Promise<'uploaded' | 'not-configured'>;
+  uploadImages(documentId: string, images: PendingDocumentImage[], editId: string): Promise<'uploaded' | 'not-configured'>;
+  removeImages(documentId: string, imageIds: string[], editId: string): Promise<void>;
   listImageIds(documentId: string): Promise<string[]>;
   useShareDocument(id: string): PersistedShareOutcome;
   useEditDocument(editId: string): PersistedShareOutcome;
@@ -159,6 +160,16 @@ export function createDocumentLifecycle(
         ...(expiresAt !== undefined ? { expiresAt } : {}),
       };
 
+      const uploadedIds: string[] = [];
+      const discardUploaded = async () => {
+        if (!uploadedIds.length) return;
+        try {
+          await persistence.removeImages(id, uploadedIds, document.editId);
+        } catch {
+          // Compensation is best-effort; document cleanup still removes leftovers.
+        }
+      };
+
       try {
         if (options?.images?.length) {
           if (options.images.some((image) => image.file.size > MAX_IMAGE_BYTES || !isSupportedImageType(image.file.type))) {
@@ -169,11 +180,20 @@ export function createDocumentLifecycle(
           if (stored.size + options.images.filter((image) => !stored.has(image.id)).length > MAX_IMAGES_PER_DOCUMENT) {
             return { kind: 'failed' };
           }
-          const uploaded = await persistence.uploadImages(id, options.images);
-          if (uploaded === 'not-configured') return { kind: 'not-configured' };
+          for (const image of options.images) {
+            const uploaded = await persistence.uploadImages(id, [image], document.editId);
+            if (uploaded === 'not-configured') {
+              await discardUploaded();
+              return { kind: 'not-configured' };
+            }
+            uploadedIds.push(image.id);
+          }
         }
         const result = await persistence.save(document);
-        if (result === 'not-configured') return { kind: 'not-configured' };
+        if (result === 'not-configured') {
+          await discardUploaded();
+          return { kind: 'not-configured' };
+        }
         return {
           kind: 'published',
           document: {
@@ -185,6 +205,7 @@ export function createDocumentLifecycle(
           },
         };
       } catch {
+        await discardUploaded();
         return { kind: 'failed' };
       }
     },
