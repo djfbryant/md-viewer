@@ -34,7 +34,7 @@ function readRecovery(): Recovery {
 
 function persistRecovery(recovery: Recovery) {
   try {
-    if (recovery.markdown === recovery.publishedMarkdown && !recovery.publishedId) {
+    if (recovery.markdown === recovery.publishedMarkdown) {
       window.localStorage.removeItem(RECOVERY_KEY);
       return;
     }

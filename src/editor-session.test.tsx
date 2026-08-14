@@ -84,7 +84,7 @@ describe('editor session', () => {
     expect(await screen.findByRole('heading', { name: 'Private revision' })).toBeInTheDocument();
   });
 
-  it('retains the edit capability after a clean save and reload', async () => {
+  it('starts a new document after a clean saved session is reopened', async () => {
     const first = render(<App />);
     fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Original' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
@@ -92,12 +92,12 @@ describe('editor session', () => {
 
     first.unmount();
     render(<App />);
-    expect(screen.getByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Original');
-    fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Revised' } });
+    expect(screen.getByRole('textbox', { name: 'Markdown document' })).toHaveValue('');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Separate' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await screen.findByText('Changes saved.');
 
-    expect(publishDocument).toHaveBeenLastCalledWith('# Revised', { id: 'saved-document', editId: 'private-edit-capability' });
+    expect(publishDocument).toHaveBeenLastCalledWith('# Separate', undefined);
   });
 
   it('clamps, resets, and cleans up the accessible splitter interaction', () => {
