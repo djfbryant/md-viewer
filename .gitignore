@@ -16,3 +16,6 @@ build/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Throwaway probes and experiments
+.scratch/
