@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FocusEvent, type MouseEvent } from 'react';
 import { formatExpiry, toDatetimeLocalValue } from './document';
 import { type SharedDocument } from './document-lifecycle';
 import { MAX_IMAGES_PER_DOCUMENT } from './document-image';
@@ -6,7 +6,8 @@ import { MAX_SPLIT, MIN_SPLIT, recallEditAccess, useEditorSession, useEditorSpli
 import { documentLifecycle } from './lib/instant-document-persistence';
 import { downloadMarkdown, interpretMarkdown, MarkdownView, type InterpretedMarkdown, type MermaidExpandRequest } from './markdown';
 import { MermaidViewer } from './mermaid-viewer';
-import { EDITOR_PATH, editPath, editUrl, onPathChange, pushPath, recognizeRoute, replacePath, sharePath, shareUrl } from './navigation';
+import { EDITOR_PATH, editPath, editUrl, infoPath, onPathChange, pushPath, recognizeRoute, replacePath, sharePath, shareUrl, type InfoPage } from './navigation';
+import { infoCopy, infoNav } from './public-information';
 import { applyTheme, getStoredTheme, nextTheme, type ThemePreference, storeTheme } from './theme';
 
 function ThemeButton({ preference, onCycle }: { preference: ThemePreference; onCycle: () => void }) {
@@ -20,6 +21,42 @@ function ThemeButton({ preference, onCycle }: { preference: ThemePreference; onC
 
 function Brand({ showName = true }: { showName?: boolean }) {
   return <div className="brand"><span className="mark" aria-hidden="true" />{showName && <span className="brand-name">MarkShare</span>}</div>;
+}
+
+function SiteLinks({ current, onNavigate }: { current?: InfoPage; onNavigate: (path: string) => void }) {
+  return (
+    <nav className="site-links" aria-label="About MarkShare">
+      {infoNav.map(({ page, label }) => (
+        <a
+          key={page}
+          href={infoPath[page]}
+          aria-current={current === page ? 'page' : undefined}
+          onClick={(event) => {
+            event.preventDefault();
+            onNavigate(infoPath[page]);
+          }}
+        >
+          {label}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+function LinkBox({ label, value, className = 'link-box' }: { label: string; value: string; className?: string }) {
+  const selectValue = (event: FocusEvent<HTMLInputElement> | MouseEvent<HTMLInputElement>) => {
+    event.currentTarget.select();
+  };
+  return (
+    <input
+      className={className}
+      readOnly
+      value={value}
+      aria-label={label}
+      onFocus={selectValue}
+      onClick={selectValue}
+    />
+  );
 }
 
 /** Keeps Preview and Share Link on the same Mermaid presentation and viewer path. */
@@ -42,12 +79,15 @@ function RenderedDocument({ document, imageSources }: { document: InterpretedMar
   </>;
 }
 
-function Home({ preference, onCycle, onCreate }: { preference: ThemePreference; onCycle: () => void; onCreate: () => void }) {
+function Home({ preference, onCycle, onCreate, onNavigate }: { preference: ThemePreference; onCycle: () => void; onCreate: () => void; onNavigate: (path: string) => void }) {
   return (
     <main className="home-shell">
       <header className="app-bar home-bar">
         <Brand />
-        <div className="bar-actions"><ThemeButton preference={preference} onCycle={onCycle} /></div>
+        <div className="bar-actions">
+          <SiteLinks onNavigate={onNavigate} />
+          <ThemeButton preference={preference} onCycle={onCycle} />
+        </div>
       </header>
       <section className="home-content" aria-labelledby="home-title">
         <div className="home-copy">
@@ -63,7 +103,56 @@ function Home({ preference, onCycle, onCreate }: { preference: ThemePreference; 
           <div className="card-step"><span>03</span><div><strong>Send one link</strong><p>Readers get a clean, read-only document.</p></div></div>
         </aside>
       </section>
-      <footer className="home-footer">Private by default · Built for clear thinking</footer>
+      <footer className="home-footer">
+        <span className="home-tagline">Private by default · Built for clear thinking</span>
+        <SiteLinks onNavigate={onNavigate} />
+      </footer>
+    </main>
+  );
+}
+
+function Info({
+  page,
+  preference,
+  onCycle,
+  onHome,
+  onNavigate,
+}: {
+  page: InfoPage;
+  preference: ThemePreference;
+  onCycle: () => void;
+  onHome: () => void;
+  onNavigate: (path: string) => void;
+}) {
+  const copy = infoCopy[page];
+
+  useEffect(() => {
+    window.document.title = `${copy.title} · MarkShare`;
+  }, [copy.title]);
+
+  return (
+    <main className="info-shell">
+      <header className="app-bar">
+        <button className="brand brand-button" onClick={onHome} aria-label="Back to MarkShare home"><Brand /></button>
+        <div className="bar-actions">
+          <SiteLinks current={page} onNavigate={onNavigate} />
+          <ThemeButton preference={preference} onCycle={onCycle} />
+        </div>
+      </header>
+      <article className="info-content" aria-labelledby="info-title">
+        <div className="info-article">
+          <p className="eyebrow">{copy.eyebrow}</p>
+          <h1 id="info-title">{copy.title}</h1>
+          <p className="info-lead">{copy.lead}</p>
+          {copy.sections.map((section) => (
+            <section key={section.heading}>
+              <h2>{section.heading}</h2>
+              {section.paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
+            </section>
+          ))}
+          <p className="info-updated">Last updated {copy.updated}</p>
+        </div>
+      </article>
     </main>
   );
 }
@@ -182,7 +271,9 @@ function Editor({
         <span>{markdown.trim() ? `${markdown.trim().split(/\s+/).length} words` : 'Draft document'}</span>
         <span>{imageCount}/{MAX_IMAGES_PER_DOCUMENT} images</span>
         <span>{formatExpiry(session.expiresAt)}</span>
-        <span className="status-url">{session.publishedId ? shareUrl(session.publishedId) : 'Save to create a share link'}</span>
+        {session.publishedId
+          ? <LinkBox className="status-url" label="Share URL" value={shareUrl(session.publishedId)} />
+          : <span className="status-url">Save to create a share link</span>}
       </footer>
       {session.recoveredDraft && <div className="toast" role="status">Recovered unsaved local draft.<button className="toast-dismiss" onClick={session.dismissRecoveredDraft} aria-label="Dismiss recovery message">×</button></div>}
       {session.saveError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="save-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissSaveError(); }}><h2 id="save-error-title">Document not saved</h2><p>{session.saveError}</p><button autoFocus className="button button--primary" onClick={session.dismissSaveError}>Done</button></section></div>}
@@ -197,11 +288,11 @@ function Editor({
           <p>Anyone with the share link can read it. No one can change it.</p>
           <div className="dialog-field">
             <span className="label">Share link — read only</span>
-            <span className="link-box">{shareUrl(session.publishedId)}</span>
+            <LinkBox label="Share link — read only" value={shareUrl(session.publishedId)} />
           </div>
           <div className="dialog-field">
             <span className="label">Edit link — private, keep it safe</span>
-            <span className="link-box">{editUrl(session.publishedEditId)}</span>
+            <LinkBox label="Edit link — private, keep it safe" value={editUrl(session.publishedEditId)} />
             <button className="button button--small" onClick={() => setConfirmRotate(true)}>Replace edit link</button>
           </div>
           <div className="dialog-field">
@@ -299,7 +390,7 @@ export function App() {
   const route = recognizeRoute(pathname);
 
   useEffect(() => {
-    if (route.kind !== 'share') window.document.title = 'MarkShare';
+    if (route.kind !== 'share' && route.kind !== 'info') window.document.title = 'MarkShare';
   }, [route.kind]);
 
   useEffect(() => {
@@ -335,6 +426,18 @@ export function App() {
 
   if (route.kind === 'unavailable') return <MissingDocument />;
 
+  if (route.kind === 'info') {
+    return (
+      <Info
+        page={route.page}
+        preference={preference}
+        onCycle={cycleTheme}
+        onHome={() => navigate('/')}
+        onNavigate={navigate}
+      />
+    );
+  }
+
   if (route.kind === 'editor' || route.kind === 'edit') {
     return (
       <Editor
@@ -348,5 +451,5 @@ export function App() {
     );
   }
 
-  return <Home preference={preference} onCycle={cycleTheme} onCreate={() => navigate(EDITOR_PATH)} />;
+  return <Home preference={preference} onCycle={cycleTheme} onCreate={() => navigate(EDITOR_PATH)} onNavigate={navigate} />;
 }

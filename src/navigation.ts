@@ -1,13 +1,25 @@
 export const SHARE_PATH_PREFIX = '/s/';
 export const EDIT_PATH_PREFIX = '/e/';
 export const EDITOR_PATH = '/new';
+export const ABOUT_PATH = '/about';
+export const PRIVACY_PATH = '/privacy';
+export const ACCEPTABLE_USE_PATH = '/acceptable-use';
+
+export type InfoPage = 'about' | 'privacy' | 'acceptable-use';
 
 export type Route =
   | { kind: 'home' }
   | { kind: 'editor' }
+  | { kind: 'info'; page: InfoPage }
   | { kind: 'share'; documentId: string }
   | { kind: 'edit'; editId: string }
   | { kind: 'unavailable' };
+
+export const infoPath: Record<InfoPage, string> = {
+  about: ABOUT_PATH,
+  privacy: PRIVACY_PATH,
+  'acceptable-use': ACCEPTABLE_USE_PATH,
+};
 
 function tokenAfter(pathname: string, prefix: string) {
   const match = new RegExp(`^${prefix}([^/]+)$`).exec(pathname);
@@ -23,6 +35,9 @@ function tokenAfter(pathname: string, prefix: string) {
 export function recognizeRoute(pathname: string): Route {
   if (pathname === '/') return { kind: 'home' };
   if (pathname === EDITOR_PATH) return { kind: 'editor' };
+  if (pathname === ABOUT_PATH || pathname === `${ABOUT_PATH}/`) return { kind: 'info', page: 'about' };
+  if (pathname === PRIVACY_PATH || pathname === `${PRIVACY_PATH}/`) return { kind: 'info', page: 'privacy' };
+  if (pathname === ACCEPTABLE_USE_PATH || pathname === `${ACCEPTABLE_USE_PATH}/`) return { kind: 'info', page: 'acceptable-use' };
 
   if (pathname.startsWith(SHARE_PATH_PREFIX)) {
     const documentId = tokenAfter(pathname, SHARE_PATH_PREFIX);

@@ -83,6 +83,7 @@ vi.mock('./lib/instant-document-persistence', async () => {
 vi.mock('mermaid', () => ({ default: mermaidApi }));
 
 import { App } from './App';
+import { documentLifecycle } from './lib/instant-document-persistence';
 
 beforeEach(() => {
   const values = new Map<string, string>();
@@ -145,7 +146,18 @@ describe('basic anonymous documents', () => {
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
     expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
-    expect(screen.getByText(/http:\/\/localhost\/s\/opaque-document-id/)).toBeInTheDocument();
+    const footerShare = screen.getByRole('textbox', { name: 'Share URL' });
+    expect(footerShare).toHaveValue('http://localhost/s/opaque-document-id');
+    fireEvent.click(footerShare);
+    expect(footerShare).toHaveProperty('selectionStart', 0);
+    expect(footerShare).toHaveProperty('selectionEnd', 'http://localhost/s/opaque-document-id'.length);
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    const shareLink = screen.getByRole('textbox', { name: 'Share link — read only' });
+    expect(shareLink).toHaveValue('http://localhost/s/opaque-document-id');
+    fireEvent.click(shareLink);
+    expect(shareLink).toHaveProperty('selectionStart', 0);
+    expect(shareLink).toHaveProperty('selectionEnd', 'http://localhost/s/opaque-document-id'.length);
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
     expect(await screen.findByText('Read only')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Release notes' })).toBeInTheDocument();
@@ -247,7 +259,9 @@ describe('basic anonymous documents', () => {
     expect(window.location.pathname).toBe('/e/private-edit-capability');
 
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
-    expect(screen.getByText(/http:\/\/localhost\/e\/private-edit-capability/)).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Edit link — private, keep it safe' })).toHaveValue(
+      'http://localhost/e/private-edit-capability',
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
 
     fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
@@ -279,7 +293,9 @@ describe('basic anonymous documents', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
     fireEvent.click(screen.getByRole('button', { name: 'Replace edit link' }));
     fireEvent.click(screen.getByRole('button', { name: 'Replace edit link' }));
-    expect(await screen.findByText(/http:\/\/localhost\/e\/replacement-edit-capability/)).toBeInTheDocument();
+    expect(await screen.findByRole('textbox', { name: 'Edit link — private, keep it safe' })).toHaveValue(
+      'http://localhost/e/replacement-edit-capability',
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
 
     window.history.replaceState({}, '', '/e/private-edit-capability');
@@ -323,6 +339,41 @@ describe('basic anonymous documents', () => {
     expect(screen.queryByText(/\/e\//)).not.toBeInTheDocument();
   });
 
+  it('opens a published share ID on a full page load for a visitor who never authored it', () => {
+    const documentId = '52567466-9a13-483a-9e62-335adaf3ca72';
+    documents.push({
+      id: documentId,
+      editId: 'visitor-must-not-see-this',
+      title: 'Visitor notes',
+      markdown: '# Visitor notes\n\nPublished for a stranger.',
+    });
+    window.history.replaceState({}, '', `/s/${documentId}`);
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: 'Visitor notes' })).toBeInTheDocument();
+    expect(screen.getByText('Read only')).toBeInTheDocument();
+    expect(screen.getByText('Published for a stranger.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: /markdown document/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/visitor-must-not-see-this/)).not.toBeInTheDocument();
+  });
+
+  it('shows the same unavailable page for a truncated share ID', () => {
+    const documentId = '52567466-9a13-483a-9e62-335adaf3ca72';
+    documents.push({
+      id: documentId,
+      editId: 'private-edit-capability',
+      title: 'Visitor notes',
+      markdown: '# Visitor notes',
+    });
+    window.history.replaceState({}, '', `/s/${documentId.slice(0, 18)}`);
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();
+    expect(screen.getByText('This share link is invalid or the document is no longer available.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Visitor notes' })).not.toBeInTheDocument();
+  });
+
   it('pastes a private image into the editor and renders it on the share link', async () => {
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
     const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
@@ -343,6 +394,9 @@ describe('basic anonymous documents', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
+    expect(vi.mocked(documentLifecycle.save).mock.lastCall?.[2]).toEqual(expect.objectContaining({
+      images: [expect.objectContaining({ id: 'pasted-image-1' })],
+    }));
     await waitFor(() => {
       expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-image-1');
     });
@@ -407,5 +461,52 @@ describe('basic anonymous documents', () => {
 
     expect(screen.getByRole('alertdialog')).toHaveTextContent('Each image must be 5 MB or smaller.');
     expect(screen.queryByRole('img', { name: 'huge.png' })).not.toBeInTheDocument();
+  });
+
+  it('omits a leftover pasted image from save when its markdown ref is removed', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    const editor = screen.getByRole('textbox', { name: /markdown document/i }) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: '# Illustrated notes' } });
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    fireEvent.paste(editor, {
+      clipboardData: {
+        files: [new File([new Uint8Array([1, 2, 3])], 'sketch.png', { type: 'image/png' })],
+      },
+    });
+
+    expect(screen.getByText('1/20 images')).toBeInTheDocument();
+    fireEvent.change(editor, { target: { value: '# Illustrated notes' } });
+    expect(screen.getByText('0/20 images')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
+    expect(vi.mocked(documentLifecycle.save).mock.lastCall?.[2]?.images).toBeUndefined();
+  });
+
+  it('uploads a pasted image if its markdown ref is restored before save', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    const editor = screen.getByRole('textbox', { name: /markdown document/i }) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: '# Illustrated notes' } });
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    fireEvent.paste(editor, {
+      clipboardData: {
+        files: [new File([new Uint8Array([1, 2, 3])], 'sketch.png', { type: 'image/png' })],
+      },
+    });
+
+    const withImage = editor.value;
+    fireEvent.change(editor, { target: { value: '# Illustrated notes' } });
+    expect(screen.getByText('0/20 images')).toBeInTheDocument();
+    fireEvent.change(editor, { target: { value: withImage } });
+    expect(screen.getByText('1/20 images')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
+    expect(vi.mocked(documentLifecycle.save).mock.lastCall?.[2]).toEqual(expect.objectContaining({
+      images: [expect.objectContaining({ id: 'pasted-image-1' })],
+    }));
   });
 });

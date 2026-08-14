@@ -43,6 +43,19 @@ export function parseDocumentImageRef(url: string) {
   return /^[A-Za-z0-9._-]+$/.test(imageId) ? imageId : undefined;
 }
 
+function markdownImageDestination(insideParens: string) {
+  return insideParens.trim().match(/^[^\s]+/)?.[0] ?? '';
+}
+
+export function referencedDocumentImageIds(markdown: string) {
+  const ids = new Set<string>();
+  for (const match of markdown.matchAll(/!\[[^\]]*\]\(([^)]*)\)/g)) {
+    const imageId = parseDocumentImageRef(markdownImageDestination(match[1] ?? ''));
+    if (imageId) ids.add(imageId);
+  }
+  return ids;
+}
+
 export function isInstantStorageUrl(url: string) {
   try {
     const { hostname } = new URL(url.startsWith('//') ? `https:${url}` : url);

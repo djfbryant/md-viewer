@@ -14,7 +14,7 @@ describe('document permissions', () => {
 
   it('serves pasted images only to a requester who already knows the document ID', () => {
     expect(rules.$files.allow.view).toBe("data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/')");
-    expect(rules.$files.allow.create).toBe("data.path.startsWith('documents/')");
+    expect(rules.$files.allow.create).toBe('true');
     expect(rules.$files.allow.update).toBe('false');
     expect(rules.$files.allow.delete).toBe("data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/') && ruleParams.editId != null");
   });

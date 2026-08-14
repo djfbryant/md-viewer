@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { DocumentLifecycle, EditCapability, EditableDocument, SaveDocumentOutcome } from './document-lifecycle';
-import { MAX_IMAGES_PER_DOCUMENT } from './document-image';
+import { MAX_IMAGES_PER_DOCUMENT, referencedDocumentImageIds } from './document-image';
 
 const RECOVERY_KEY = 'markshare-editor-recovery-v1';
 const ACCESS_KEY = 'markshare-edit-access-v1';
@@ -140,8 +140,11 @@ export function useEditorSession(
   const capability: EditCapability | undefined = publishedId && publishedEditId
     ? { id: publishedId, editId: publishedEditId }
     : undefined;
+  const referencedImageIds = useMemo(() => referencedDocumentImageIds(markdown), [markdown]);
   const publishedImageCount = Object.keys(existing?.imageSources ?? {}).length;
-  const imageCount = publishedImageCount + pendingImages.filter((image) => !existing?.imageSources?.[image.id]).length;
+  const imageCount = publishedImageCount + pendingImages.filter((image) => (
+    referencedImageIds.has(image.id) && !existing?.imageSources?.[image.id]
+  )).length;
   // Stored sources win. Preview blobs stay until unmount or document switch so a
   // remote Instant URL can fetch without revoking the still-visible preview.
   const imageSources = useMemo(() => ({
@@ -193,7 +196,9 @@ export function useEditorSession(
     const nextExpiry = options && 'expiresAt' in options ? options.expiresAt ?? null : expiresAt;
     try {
       const images = pendingImages
-        .filter((image): image is PendingImage & { file: File } => !image.uploaded && Boolean(image.file))
+        .filter((image): image is PendingImage & { file: File } => (
+          !image.uploaded && Boolean(image.file) && referencedImageIds.has(image.id)
+        ))
         .map((image) => ({ id: image.id, file: image.file }));
       const outcome = await lifecycle.save(markdown, capability, {
         expiresAt: nextExpiry,
@@ -208,7 +213,9 @@ export function useEditorSession(
         setRecoveredDraft(false);
         setSavedNotice(true);
         rememberEditAccess(outcome.document.id, outcome.document.editId);
-        setPendingImages((current) => current.map((image) => ({ id: image.id, previewUrl: image.previewUrl, uploaded: true })));
+        setPendingImages((current) => current.map((image) => (
+          referencedImageIds.has(image.id) ? { id: image.id, previewUrl: image.previewUrl, uploaded: true } : image
+        )));
         if (!capability) persistRecovery(null, emptyRecovery);
       } else if (outcome.kind === 'not-configured') {
         setSaveError('Saving needs an InstantDB app. Add VITE_INSTANT_APP_ID to save this document.');
@@ -222,7 +229,7 @@ export function useEditorSession(
     } finally {
       setIsSaving(false);
     }
-  }, [capability, expiresAt, lifecycle, markdown, pendingImages]);
+  }, [capability, expiresAt, lifecycle, markdown, pendingImages, referencedImageIds]);
 
   const deleteDocument = useCallback(async () => {
     if (!capability) return { kind: 'failed' as const };

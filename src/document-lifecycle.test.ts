@@ -350,6 +350,23 @@ describe('Document lifecycle', () => {
     expect(store.images.get(published.document.id)).toHaveLength(20);
   });
 
+  it('fails save without publishing when image create is denied', async () => {
+    const store = memoryStore();
+    const persistence: DocumentPersistence = {
+      ...store,
+      uploadImages: async () => {
+        throw new Error('Permission denied: not has-storage-permission?');
+      },
+    };
+    const lifecycle = createDocumentLifecycle(persistence, () => 'opaque-document-id');
+
+    await expect(lifecycle.save('# Notes', undefined, {
+      images: [{ id: 'pasted-image', file: new File(['x'], 'sketch.png', { type: 'image/png' }) }],
+    })).resolves.toEqual({ kind: 'failed' });
+    expect(store.documents.size).toBe(0);
+    expect(store.images.size).toBe(0);
+  });
+
   it('removes uploaded images when a later persist fails', async () => {
     const store = memoryStore();
     const persistence: DocumentPersistence = {
