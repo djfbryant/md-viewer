@@ -422,7 +422,7 @@ function isLocalImageSrc(src: string) {
 
 function usePrivateImageSrc(src: string | undefined) {
   const [remoteSrc, setRemoteSrc] = useState<string | undefined>();
-  const localFallback = useRef<string | undefined>();
+  const localFallback = useRef<string | undefined>(undefined);
 
   if (src && isLocalImageSrc(src)) localFallback.current = src;
   if (!src) localFallback.current = undefined;
