@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const documents = vi.hoisted(() => {
@@ -316,7 +316,12 @@ describe('basic anonymous documents', () => {
 
   it('pastes a private image into the editor and renders it on the share link', async () => {
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
-    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    let srcWhenPreviewRevoked: string | null = null;
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation((url) => {
+      if (url === 'blob:pasted-preview') {
+        srcWhenPreviewRevoked = screen.getByRole('img', { name: 'sketch.png' }).getAttribute('src');
+      }
+    });
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     const editor = screen.getByRole('textbox', { name: /markdown document/i }) as HTMLTextAreaElement;
@@ -334,8 +339,11 @@ describe('basic anonymous documents', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-image-1');
+    });
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:pasted-preview');
-    expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-image-1');
+    expect(srcWhenPreviewRevoked).toBe('blob:pasted-image-1');
 
     fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
     expect(await screen.findByText('Read only')).toBeInTheDocument();

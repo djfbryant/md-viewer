@@ -143,8 +143,8 @@ export function useEditorSession(
   const publishedImageCount = Object.keys(existing?.imageSources ?? {}).length;
   const imageCount = publishedImageCount + pendingImages.filter((image) => !existing?.imageSources?.[image.id]).length;
   const imageSources = useMemo(() => ({
-    ...existing?.imageSources,
     ...Object.fromEntries(pendingImages.map((image) => [image.id, image.previewUrl])),
+    ...existing?.imageSources,
   }), [existing?.imageSources, pendingImages]);
 
   useEffect(() => {
