@@ -50,9 +50,10 @@ const instantDocumentPersistence: DocumentPersistence = {
   },
 
   async removeImages(documentId, imageIds, editId) {
-    if (!db || !imageIds.length) return;
-    await db.transact(imageIds.map((imageId) => (
-      db.tx.$files[lookup('path', documentImagePath(documentId, imageId))]
+    const database = db;
+    if (!database || !imageIds.length) return;
+    await database.transact(imageIds.map((imageId) => (
+      database.tx.$files[lookup('path', documentImagePath(documentId, imageId))]
         .ruleParams({ knownDocumentId: documentId, editId })
         .delete()
     )));
