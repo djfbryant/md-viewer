@@ -108,6 +108,37 @@ describe('editor session', () => {
     expect(publishDocument).toHaveBeenLastCalledWith('# Separate', undefined, { expiresAt: null });
   });
 
+  it('keeps an unsaved new-document draft after a different edit link is opened', async () => {
+    const first = render(<App />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Unsaved new draft' } });
+    expect(window.localStorage.getItem('markshare-editor-recovery-v1')).toContain('# Unsaved new draft');
+    first.unmount();
+
+    documents.set('other-document', { id: 'other-document', editId: 'other-edit-capability', title: 'Other notes', markdown: '# Other notes' });
+    window.history.replaceState({}, '', '/e/other-edit-capability');
+    const second = render(<App />);
+    expect(await screen.findByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Other notes');
+    expect(window.localStorage.getItem('markshare-editor-recovery-v1')).toContain('# Unsaved new draft');
+    second.unmount();
+
+    window.history.replaceState({}, '', '/new');
+    render(<App />);
+    expect(await screen.findByText('Recovered unsaved local draft.')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Unsaved new draft');
+  });
+
+  it('does not rewrite remembered edit access while typing', async () => {
+    const setItem = vi.spyOn(window.localStorage, 'setItem');
+    render(<App />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Access' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+    setItem.mockClear();
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Access\n\nMore words' } });
+    expect(setItem.mock.calls.filter(([key]) => key === 'markshare-edit-access-v1')).toEqual([]);
+  });
+
   it('clamps, resets, and cleans up the accessible splitter interaction', () => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 100, bottom: 0, width: 100, height: 0, toJSON: () => ({}) });
     render(<App />);

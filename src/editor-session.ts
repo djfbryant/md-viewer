@@ -42,7 +42,6 @@ function persistRecovery(editId: string | null, recovery: Recovery) {
     const key = recoveryStorageKey(editId);
     if (recovery.markdown === recovery.publishedMarkdown) {
       window.localStorage.removeItem(key);
-      window.localStorage.removeItem(RECOVERY_KEY);
       return;
     }
     window.localStorage.setItem(key, JSON.stringify(recovery));
@@ -74,7 +73,9 @@ function writeAccess(access: Record<string, string>) {
 }
 
 export function rememberEditAccess(id: string, editId: string) {
-  writeAccess({ ...readAccess(), [id]: editId });
+  const access = readAccess();
+  if (access[id] === editId) return;
+  writeAccess({ ...access, [id]: editId });
 }
 
 export function recallEditAccess(id: string) {
@@ -131,11 +132,11 @@ export function useEditorSession(
     setExpiresAt(existing.expiresAt ?? null);
     setRecoveredDraft(nextMarkdown !== existing.markdown);
     rememberEditAccess(existing.id, existing.editId);
-  }, [existing]);
+  }, [existing?.editId, existing?.expiresAt, existing?.id, existing?.markdown]);
 
   useEffect(() => {
-    persistRecovery(publishedEditId, { markdown, publishedMarkdown, publishedId, publishedEditId });
-  }, [markdown, publishedEditId, publishedId, publishedMarkdown]);
+    persistRecovery(publishedEditId ?? routeEditId ?? null, { markdown, publishedMarkdown, publishedId, publishedEditId });
+  }, [markdown, publishedEditId, publishedId, publishedMarkdown, routeEditId]);
 
   useEffect(() => {
     if (!savedNotice) return;
@@ -164,6 +165,7 @@ export function useEditorSession(
         setRecoveredDraft(false);
         setSavedNotice(true);
         rememberEditAccess(outcome.document.id, outcome.document.editId);
+        if (!capability) persistRecovery(null, emptyRecovery);
       } else if (outcome.kind === 'not-configured') {
         setSaveError('Saving needs an InstantDB app. Add VITE_INSTANT_APP_ID to save this document.');
       } else {
