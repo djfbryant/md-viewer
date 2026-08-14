@@ -62,6 +62,14 @@ describe('MarkShare shell', () => {
     render(<App />);
     expect(screen.getByRole('heading', { name: 'Privacy' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /create a document/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Document unavailable' })).not.toBeInTheDocument();
+  });
+
+  it('loads About from /about instead of showing Document unavailable', () => {
+    window.history.replaceState({}, '', '/about');
+    render(<App />);
+    expect(screen.getByRole('heading', { name: 'About MarkShare' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Document unavailable' })).not.toBeInTheDocument();
   });
 
   it('does not open the editor for an unknown path', () => {
