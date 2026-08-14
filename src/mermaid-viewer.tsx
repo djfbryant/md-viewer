@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import './styles/mermaid-viewer.css';
 
@@ -124,7 +124,8 @@ function useViewportTransform(viewportRef: MutableRefObject<HTMLDivElement | nul
     fit();
   }, [fit, size]);
 
-  return [transform, { fit, panBy, zoomBy, zoomTo }];
+  const controls = useMemo(() => ({ fit, panBy, zoomBy, zoomTo }), [fit, panBy, zoomBy, zoomTo]);
+  return [transform, controls];
 }
 
 function focusableElements(container: HTMLElement) {

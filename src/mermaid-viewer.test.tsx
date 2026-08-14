@@ -21,6 +21,7 @@ afterEach(() => {
   cleanup();
   document.getElementById('root')?.remove();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function ViewerHarness({ svg = diagram }: { svg?: string }) {
@@ -102,6 +103,29 @@ describe('MermaidViewer', () => {
 
     rendered.rerender(<ViewerHarness svg={'<svg viewBox="0 0 400 100"></svg>'} />);
     expect(screen.getByLabelText('Zoom 100%')).toBeInTheDocument();
+  });
+
+  it('keeps one ResizeObserver while a resize refits the diagram', async () => {
+    const observers: Array<{ callback: ResizeObserverCallback }> = [];
+    class ResizeObserverMock {
+      callback: ResizeObserverCallback;
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+        observers.push(this);
+      }
+      disconnect() {}
+      observe() {}
+      unobserve() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+
+    render(<ViewerHarness />);
+    await waitFor(() => expect(observers).toHaveLength(1));
+
+    act(() => observers[0]?.callback([], observers[0] as unknown as ResizeObserver));
+
+    await waitFor(() => expect(screen.getByLabelText('Zoom 45%')).toBeInTheDocument());
+    expect(observers).toHaveLength(1);
   });
 
   it('cleans up its document state when unmounted while open', () => {
