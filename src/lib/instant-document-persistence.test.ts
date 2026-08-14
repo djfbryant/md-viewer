@@ -19,6 +19,7 @@ describe('Instant share lookup', () => {
   const documentId = '52567466-9a13-483a-9e62-335adaf3ca72';
 
   beforeEach(() => {
+    useQuery.mockClear();
     useQuery.mockReturnValue({
       data: {
         documents: [{ id: documentId, title: 'Notes', markdown: '# Notes' }],

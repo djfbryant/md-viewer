@@ -13,4 +13,9 @@ describe('document image references', () => {
     expect(referencedDocumentImageIds('# Notes')).toEqual(new Set());
     expect(referencedDocumentImageIds('![gone](https://example.com/x.png)')).toEqual(new Set());
   });
+
+  it('collects markshare-image ids when the destination has a Markdown title', () => {
+    expect(referencedDocumentImageIds('![sketch](markshare-image:kept "Sketch")')).toEqual(new Set(['kept']));
+    expect(referencedDocumentImageIds("![sketch](markshare-image:kept 'Sketch')")).toEqual(new Set(['kept']));
+  });
 });
