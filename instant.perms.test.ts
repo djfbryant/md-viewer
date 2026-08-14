@@ -4,7 +4,11 @@ import rules from './instant.perms';
 describe('document permissions', () => {
   it('keeps the private edit capability out of every query result', () => {
     expect(rules.documents.fields?.editId).toBe('false');
-    expect(rules.documents.allow.update).toContain('data.editId == ruleParams.editId');
-    expect(rules.documents.allow.update).toContain('newData.editId == data.editId');
+  });
+
+  it('lets a share ID read a document and an edit ID update or replace that capability', () => {
+    expect(rules.documents.allow.view).toContain('data.id == ruleParams.knownDocumentId');
+    expect(rules.documents.allow.view).toContain('data.editId == ruleParams.editId');
+    expect(rules.documents.allow.update).toBe('data.editId == ruleParams.editId');
   });
 });

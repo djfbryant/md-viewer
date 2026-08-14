@@ -6,8 +6,8 @@ const rules = {
   documents: {
     allow: {
       create: 'true',
-      view: 'data.id == ruleParams.knownDocumentId',
-      update: 'data.editId == ruleParams.editId && newData.editId == data.editId',
+      view: 'data.id == ruleParams.knownDocumentId || data.editId == ruleParams.editId',
+      update: 'data.editId == ruleParams.editId',
       delete: 'false',
     },
     fields: {

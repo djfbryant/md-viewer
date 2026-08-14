@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
-import { getShareId, sharePath, shareUrl, formatExpiry, toDatetimeLocalValue } from './document';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { formatExpiry, toDatetimeLocalValue } from './document';
 import { type SharedDocument } from './document-lifecycle';
-import { MAX_SPLIT, MIN_SPLIT, useEditorSession, useEditorSplit } from './editor-session';
+import { MAX_SPLIT, MIN_SPLIT, recallEditAccess, useEditorSession, useEditorSplit } from './editor-session';
 import { documentLifecycle } from './lib/instant-document-persistence';
 import { downloadMarkdown, interpretMarkdown, MarkdownView, type InterpretedMarkdown, type MermaidExpandRequest } from './markdown';
 import { MermaidViewer } from './mermaid-viewer';
+import { EDITOR_PATH, editPath, editUrl, onPathChange, pushPath, recognizeRoute, replacePath, sharePath, shareUrl } from './navigation';
 import { applyTheme, getStoredTheme, nextTheme, type ThemePreference, storeTheme } from './theme';
 
 function ThemeButton({ preference, onCycle }: { preference: ThemePreference; onCycle: () => void }) {
@@ -65,25 +66,57 @@ function Home({ preference, onCycle, onCreate }: { preference: ThemePreference; 
   );
 }
 
-function Editor({ preference, onCycle, onBack, onNavigate }: { preference: ThemePreference; onCycle: () => void; onBack: () => void; onNavigate: (path: string) => void }) {
+function Editor({
+  preference,
+  onCycle,
+  onBack,
+  onNavigate,
+  onReplace,
+  editId,
+}: {
+  preference: ThemePreference;
+  onCycle: () => void;
+  onBack: () => void;
+  onNavigate: (path: string) => void;
+  onReplace: (path: string) => void;
+  editId?: string;
+}) {
   const [tab, setTab] = useState<'write' | 'preview'>('write');
   const [shareOpen, setShareOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const session = useEditorSession(documentLifecycle);
+  const [confirmRotate, setConfirmRotate] = useState(false);
+  const remote = documentLifecycle.useEditDocument(editId ?? '');
+  const existing = editId && remote.kind === 'available' ? remote.document : undefined;
+  const session = useEditorSession(documentLifecycle, existing, editId);
   const split = useEditorSplit();
   const { markdown, isSaving, save } = session;
   const interpreted = useMemo(() => interpretMarkdown(markdown), [markdown]);
+
+  const publish = useCallback(async (options?: { expiresAt?: Date | null }) => {
+    const outcome = await save(options);
+    if (outcome.kind === 'published' && window.location.pathname === EDITOR_PATH) {
+      onReplace(editPath(outcome.document.editId));
+    }
+    return outcome;
+  }, [onReplace, save]);
 
   useEffect(() => {
     const saveWithShortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
         event.preventDefault();
-        if (!isSaving) void save();
+        if (!isSaving) void publish();
       }
     };
     window.addEventListener('keydown', saveWithShortcut);
     return () => window.removeEventListener('keydown', saveWithShortcut);
-  }, [isSaving, save]);
+  }, [isSaving, publish]);
+
+  if (editId && remote.kind === 'loading' && !session.publishedEditId) {
+    return <ReaderLayout><section className="reader-message"><p>Opening document…</p></section></ReaderLayout>;
+  }
+  if (editId && remote.kind === 'unavailable' && session.publishedEditId !== editId) {
+    return <MissingDocument />;
+  }
 
   return (
     <main className="editor-shell" data-tab={tab}>
@@ -100,7 +133,7 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
           <ThemeButton preference={preference} onCycle={onCycle} />
           <label className="button import-button"><span>Import .md</span><input type="file" accept=".md,text/markdown,text/plain" onChange={session.importMarkdown} /></label>
           {session.publishedId && <button className="button share-button" onClick={() => setShareOpen(true)} aria-label="Share"><span className="share-long">Share</span><span className="share-short" aria-hidden="true">↗</span></button>}
-          <button className="button button--primary" onClick={() => void save()} disabled={isSaving}><span className="save-long">{isSaving ? 'Saving…' : 'Save changes'}</span><span className="save-short">Save</span></button>
+          <button className="button button--primary" onClick={() => void publish()} disabled={isSaving}><span className="save-long">{isSaving ? 'Saving…' : 'Save changes'}</span><span className="save-short">Save</span></button>
         </div>
       </header>
       <nav className="tabs" aria-label="Document workspace">
@@ -129,14 +162,20 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
       {session.saveError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="save-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissSaveError(); }}><h2 id="save-error-title">Document not saved</h2><p>{session.saveError}</p><button autoFocus className="button button--primary" onClick={session.dismissSaveError}>Done</button></section></div>}
       {session.importError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="import-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissImportError(); }}><h2 id="import-error-title">Markdown not imported</h2><p>{session.importError}</p><button autoFocus className="button button--primary" onClick={session.dismissImportError}>Done</button></section></div>}
       {session.deleteError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="delete-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissDeleteError(); }}><h2 id="delete-error-title">Document not deleted</h2><p>{session.deleteError}</p><button autoFocus className="button button--primary" onClick={session.dismissDeleteError}>Done</button></section></div>}
+      {session.rotateError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="rotate-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissRotateError(); }}><h2 id="rotate-error-title">Edit link not replaced</h2><p>{session.rotateError}</p><button autoFocus className="button button--primary" onClick={session.dismissRotateError}>Done</button></section></div>}
       {session.savedNotice && session.publishedId && <div className="toast" role="status">Changes saved. <button className="toast-link" onClick={() => onNavigate(sharePath(session.publishedId!))}>Open share link</button></div>}
-      {shareOpen && !confirmDelete && session.publishedId && <div className="dialog-backdrop" role="presentation" onClick={() => { setShareOpen(false); setConfirmDelete(false); }}>
-        <section className="dialog" role="dialog" aria-labelledby="share-title" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === 'Escape') { setShareOpen(false); setConfirmDelete(false); } }}>
+      {shareOpen && !confirmDelete && !confirmRotate && session.publishedId && session.publishedEditId && <div className="dialog-backdrop" role="presentation" onClick={() => { setShareOpen(false); setConfirmDelete(false); setConfirmRotate(false); }}>
+        <section className="dialog" role="dialog" aria-labelledby="share-title" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === 'Escape') { setShareOpen(false); setConfirmDelete(false); setConfirmRotate(false); } }}>
           <h2 id="share-title">Your document is live</h2>
           <p>Anyone with the share link can read it. No one can change it.</p>
           <div className="dialog-field">
             <span className="label">Share link — read only</span>
             <span className="link-box">{shareUrl(session.publishedId)}</span>
+          </div>
+          <div className="dialog-field">
+            <span className="label">Edit link — private, keep it safe</span>
+            <span className="link-box">{editUrl(session.publishedEditId)}</span>
+            <button className="button button--small" onClick={() => setConfirmRotate(true)}>Replace edit link</button>
           </div>
           <div className="dialog-field">
             <span className="label">Expiry</span>
@@ -146,14 +185,14 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
                 type="datetime-local"
                 aria-label="Expiry date and time"
                 value={session.expiresAt ? toDatetimeLocalValue(session.expiresAt) : ''}
-                onChange={(event) => { void save({ expiresAt: event.target.value ? new Date(event.target.value) : null }); }}
+                onChange={(event) => { void publish({ expiresAt: event.target.value ? new Date(event.target.value) : null }); }}
               />
-              {session.expiresAt && <button className="button button--small" onClick={() => void save({ expiresAt: null })}>Remove</button>}
+              {session.expiresAt && <button className="button button--small" onClick={() => void publish({ expiresAt: null })}>Remove</button>}
             </div>
           </div>
           <div className="dialog-actions dialog-actions--split">
             <button className="button button--quiet button--danger" onClick={() => setConfirmDelete(true)}>Delete document</button>
-            <button className="button button--primary" onClick={() => { setShareOpen(false); setConfirmDelete(false); }}>Done</button>
+            <button className="button button--primary" onClick={() => { setShareOpen(false); setConfirmDelete(false); setConfirmRotate(false); }}>Done</button>
           </div>
         </section>
       </div>}
@@ -163,6 +202,14 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
         <div className="dialog-actions">
           <button className="button" onClick={() => setConfirmDelete(false)}>Cancel</button>
           <button autoFocus className="button button--danger" onClick={() => { void session.deleteDocument().then((outcome) => { if (outcome.kind === 'deleted') { setConfirmDelete(false); setShareOpen(false); onBack(); } }); }}>Delete document</button>
+        </div>
+      </section></div>}
+      {confirmRotate && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="rotate-title" onKeyDown={(event) => { if (event.key === 'Escape') setConfirmRotate(false); }}>
+        <h2 id="rotate-title">Replace this edit link?</h2>
+        <p>The current edit link will stop working. Anyone who has it will lose edit access.</p>
+        <div className="dialog-actions">
+          <button className="button" onClick={() => setConfirmRotate(false)}>Cancel</button>
+          <button autoFocus className="button button--primary" onClick={() => { void session.rotateEditLink().then((outcome) => { if (outcome.kind === 'rotated') { setConfirmRotate(false); onReplace(editPath(outcome.document.editId)); } }); }}>Replace edit link</button>
         </div>
       </section></div>}
     </main>
@@ -180,12 +227,13 @@ function ReaderLayout({ actions, children, title }: { actions?: React.ReactNode;
   </main>;
 }
 
-function Reader({ document }: { document: SharedDocument }) {
+function Reader({ document, onEdit }: { document: SharedDocument; onEdit?: () => void }) {
   const interpreted = useMemo(() => interpretMarkdown(document.markdown), [document.markdown]);
 
   return <ReaderLayout
     actions={<>
       <span className="reader-expiry">{formatExpiry(document.expiresAt)}</span>
+      {onEdit && <button className="button" onClick={onEdit}>Edit</button>}
       <button className="button" onClick={() => downloadMarkdown(interpreted)}>Download .md</button>
     </>}
     title={interpreted.title}
@@ -196,9 +244,10 @@ function MissingDocument() {
   return <ReaderLayout><section className="reader-message"><h1>Document unavailable</h1><p>This share link is invalid or the document is no longer available.</p></section></ReaderLayout>;
 }
 
-function ShareRoute({ documentId }: { documentId: string }) {
+function ShareRoute({ documentId, onEdit }: { documentId: string; onEdit: (editId: string) => void }) {
   const [, setTick] = useState(0);
   const outcome = documentLifecycle.useShareDocument(documentId);
+  const rememberedEditId = recallEditAccess(documentId);
 
   useEffect(() => {
     if (outcome.kind !== 'available' || !outcome.document.expiresAt) return;
@@ -211,17 +260,20 @@ function ShareRoute({ documentId }: { documentId: string }) {
   }, [outcome]);
 
   if (outcome.kind === 'loading') return <ReaderLayout><section className="reader-message"><p>Opening document…</p></section></ReaderLayout>;
-  return outcome.kind === 'available' ? <Reader document={outcome.document} /> : <MissingDocument />;
+  return outcome.kind === 'available'
+    ? <Reader document={outcome.document} onEdit={rememberedEditId ? () => onEdit(rememberedEditId) : undefined} />
+    : <MissingDocument />;
 }
 
 export function App() {
   const [preference, setPreference] = useState<ThemePreference>(() => getStoredTheme());
   const [isDark, setIsDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
   const [pathname, setPathname] = useState(() => window.location.pathname);
+  const route = recognizeRoute(pathname);
 
   useEffect(() => {
-    if (!pathname.startsWith('/s/')) window.document.title = 'MarkShare';
-  }, [pathname]);
+    if (route.kind !== 'share') window.document.title = 'MarkShare';
+  }, [route.kind]);
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -232,11 +284,7 @@ export function App() {
 
   useEffect(() => applyTheme(preference, isDark), [preference, isDark]);
 
-  useEffect(() => {
-    const updatePathname = () => setPathname(window.location.pathname);
-    window.addEventListener('popstate', updatePathname);
-    return () => window.removeEventListener('popstate', updatePathname);
-  }, []);
+  useEffect(() => onPathChange(() => setPathname(window.location.pathname)), []);
 
   const cycleTheme = () => {
     const next = nextTheme(preference);
@@ -244,15 +292,34 @@ export function App() {
     setPreference(next);
   };
 
-  const navigate = (path: string) => {
-    window.history.pushState({}, '', path);
+  const navigate = useCallback((path: string) => {
+    pushPath(path);
     setPathname(path);
-  };
+  }, []);
 
-  const shareId = getShareId(pathname);
-  if (pathname.startsWith('/s/')) return shareId ? <ShareRoute documentId={shareId} /> : <MissingDocument />;
+  const replace = useCallback((path: string) => {
+    replacePath(path);
+    setPathname(path);
+  }, []);
 
-  return pathname === '/'
-    ? <Home preference={preference} onCycle={cycleTheme} onCreate={() => navigate('/new')} />
-    : <Editor preference={preference} onCycle={cycleTheme} onBack={() => navigate('/')} onNavigate={navigate} />;
+  if (route.kind === 'share') {
+    return <ShareRoute documentId={route.documentId} onEdit={(editId) => navigate(editPath(editId))} />;
+  }
+
+  if (route.kind === 'unavailable') return <MissingDocument />;
+
+  if (route.kind === 'editor' || route.kind === 'edit') {
+    return (
+      <Editor
+        preference={preference}
+        onCycle={cycleTheme}
+        onBack={() => navigate('/')}
+        onNavigate={navigate}
+        onReplace={replace}
+        editId={route.kind === 'edit' ? route.editId : undefined}
+      />
+    );
+  }
+
+  return <Home preference={preference} onCycle={cycleTheme} onCreate={() => navigate(EDITOR_PATH)} />;
 }

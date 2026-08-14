@@ -34,6 +34,16 @@ export type DeleteDocumentOutcome =
   | { kind: 'not-configured' }
   | { kind: 'failed' };
 
+export type RotateDocumentOutcome =
+  | { kind: 'rotated'; document: EditCapability }
+  | { kind: 'not-configured' }
+  | { kind: 'failed' };
+
+export type EditDocumentOutcome =
+  | { kind: 'loading' }
+  | { kind: 'unavailable' }
+  | { kind: 'available'; document: EditableDocument };
+
 export type CleanupDocumentOutcome =
   | { kind: 'cleaned'; removed: Array<{ documentId: string; imageCount: number }> }
   | { kind: 'not-configured' }
@@ -74,7 +84,9 @@ export type RemovableDocument = {
 export interface DocumentPersistence {
   save(document: StoredDocument): Promise<'published' | 'not-configured'>;
   useShareDocument(id: string): PersistedShareOutcome;
+  useEditDocument(editId: string): PersistedShareOutcome;
   markDeleted(id: string, editId: string, deletedAt: Date): Promise<'deleted' | 'not-configured'>;
+  rotateEditId(id: string, editId: string, nextEditId: string): Promise<'rotated' | 'not-configured'>;
 }
 
 export interface DocumentRemovalStore {
@@ -85,6 +97,8 @@ export interface DocumentRemovalStore {
 export interface DocumentLifecycle {
   save(markdown: string, existing?: EditCapability, options?: SaveDocumentOptions): Promise<SaveDocumentOutcome>;
   useShareDocument(id: string): ShareDocumentOutcome;
+  useEditDocument(editId: string): EditDocumentOutcome;
+  rotate(existing: EditCapability): Promise<RotateDocumentOutcome>;
   delete(existing: EditCapability): Promise<DeleteDocumentOutcome>;
   cleanup(): Promise<CleanupDocumentOutcome>;
 }
@@ -141,19 +155,26 @@ export function createDocumentLifecycle(
       }
     },
     useShareDocument(id) {
-      const outcome = persistence.useShareDocument(id);
+      return toShareOutcome(persistence.useShareDocument(id), now());
+    },
+    useEditDocument(editId) {
+      const outcome = toShareOutcome(persistence.useEditDocument(editId), now());
+      if (!editId) return { kind: 'unavailable' };
       if (outcome.kind !== 'available') return outcome;
-      if (isDocumentUnavailable(outcome.document, now())) return { kind: 'unavailable' };
-      const expiresAt = toDate(outcome.document.expiresAt);
       return {
         kind: 'available',
-        document: {
-          id: outcome.document.id,
-          title: outcome.document.title,
-          markdown: outcome.document.markdown,
-          ...(expiresAt ? { expiresAt } : {}),
-        },
+        document: { ...outcome.document, editId },
       };
+    },
+    async rotate(existing) {
+      try {
+        const nextEditId = generateId();
+        const result = await persistence.rotateEditId(existing.id, existing.editId, nextEditId);
+        if (result === 'not-configured') return { kind: 'not-configured' };
+        return { kind: 'rotated', document: { id: existing.id, editId: nextEditId } };
+      } catch {
+        return { kind: 'failed' };
+      }
     },
     async delete(existing) {
       try {
@@ -167,6 +188,21 @@ export function createDocumentLifecycle(
     async cleanup() {
       if (!removal) return { kind: 'not-configured' };
       return cleanupDueDocuments(removal, now());
+    },
+  };
+}
+
+function toShareOutcome(outcome: PersistedShareOutcome, at: Date): ShareDocumentOutcome {
+  if (outcome.kind !== 'available') return outcome;
+  if (isDocumentUnavailable(outcome.document, at)) return { kind: 'unavailable' };
+  const expiresAt = toDate(outcome.document.expiresAt);
+  return {
+    kind: 'available',
+    document: {
+      id: outcome.document.id,
+      title: outcome.document.title,
+      markdown: outcome.document.markdown,
+      ...(expiresAt ? { expiresAt } : {}),
     },
   };
 }

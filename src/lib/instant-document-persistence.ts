@@ -31,6 +31,22 @@ const instantDocumentPersistence: DocumentPersistence = {
       : { kind: 'available', document };
   },
 
+  useEditDocument(editId): PersistedShareOutcome {
+    if (!db) return { kind: 'unavailable' };
+
+    const { data, error, isLoading } = db.useQuery(
+      { documents: { $: { where: { editId: editId || '__none__' } } } },
+      { ruleParams: { editId: editId || '__none__' } },
+    );
+
+    if (!editId) return { kind: 'unavailable' };
+    if (isLoading) return { kind: 'loading' };
+    const document = data?.documents[0];
+    return error || !document
+      ? { kind: 'unavailable' }
+      : { kind: 'available', document };
+  },
+
   async markDeleted(id, editId, deletedAt) {
     if (!db) return 'not-configured';
 
@@ -39,6 +55,15 @@ const instantDocumentPersistence: DocumentPersistence = {
       updatedAt: deletedAt,
     }));
     return 'deleted';
+  },
+
+  async rotateEditId(id, editId, nextEditId) {
+    if (!db) return 'not-configured';
+
+    await db.transact(db.tx.documents[id].ruleParams({ knownDocumentId: id, editId }).update({
+      editId: nextEditId,
+    }));
+    return 'rotated';
   },
 };
 
