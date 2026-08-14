@@ -82,11 +82,15 @@ function rehypeSafeUrls() {
 
 let mermaidApiPromise: Promise<typeof import('mermaid')['default']> | undefined;
 
+const MERMAID_FONT_FAMILY = "'Inter', ui-sans-serif, -apple-system, 'Segoe UI', system-ui, sans-serif";
+
 function getMermaidApi() {
   mermaidApiPromise ??= import('mermaid').then(({ default: mermaid }) => {
     mermaid.initialize({
       htmlLabels: false,
       flowchart: { htmlLabels: false },
+      fontFamily: MERMAID_FONT_FAMILY,
+      themeVariables: { fontFamily: MERMAID_FONT_FAMILY },
       secure: ['securityLevel', 'startOnLoad', 'suppressErrorRendering'],
       securityLevel: 'strict',
       startOnLoad: false,

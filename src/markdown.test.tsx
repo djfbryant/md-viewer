@@ -280,6 +280,10 @@ describe('Markdown interpretation', () => {
       htmlLabels: false,
       securityLevel: 'strict',
       startOnLoad: false,
+      fontFamily: "'Inter', ui-sans-serif, -apple-system, 'Segoe UI', system-ui, sans-serif",
+      themeVariables: {
+        fontFamily: "'Inter', ui-sans-serif, -apple-system, 'Segoe UI', system-ui, sans-serif",
+      },
     }));
     valid.unmount();
 
