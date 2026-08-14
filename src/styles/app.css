@@ -76,7 +76,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .markdown .hljs-keyword, .markdown .hljs-selector-tag, .markdown .hljs-literal { color: var(--accent-ink); }
 .markdown .hljs-string, .markdown .hljs-attr { color: var(--warn); }
 .markdown .hljs-comment { color: var(--ink-faint); font-style: italic; }
-.mermaid-diagram { overflow: hidden; margin: 1.5em 0; border: 1px solid var(--line-soft); border-radius: var(--radius-control); background: color-mix(in srgb, var(--surface) 96%, var(--surface-2)); }
+.mermaid-diagram { overflow: hidden; margin: 1.5em 0; border: 1px solid var(--line-soft); border-radius: 0; background: color-mix(in srgb, var(--surface) 96%, var(--surface-2)); }
 .mermaid-diagram--wide { width: 100cqw; margin-left: calc((100% - 100cqw) / 2); }
 .mermaid-diagram__toolbar { display: flex; align-items: center; min-height: 34px; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-bottom: 1px solid color-mix(in srgb, var(--line-soft) 70%, transparent); background: transparent; color: var(--ink-soft); }
 .mermaid-diagram__label { color: var(--ink); font-size: var(--type-small-size); font-weight: var(--weight-semibold); }

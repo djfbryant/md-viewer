@@ -81,6 +81,7 @@ let mermaidApiPromise: Promise<typeof import('mermaid')['default']> | undefined;
 function getMermaidApi() {
   mermaidApiPromise ??= import('mermaid').then(({ default: mermaid }) => {
     mermaid.initialize({
+      htmlLabels: false,
       flowchart: { htmlLabels: false },
       secure: ['securityLevel', 'startOnLoad', 'suppressErrorRendering'],
       securityLevel: 'strict',

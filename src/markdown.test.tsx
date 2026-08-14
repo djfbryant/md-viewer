@@ -116,6 +116,7 @@ describe('Markdown interpretation', () => {
 
     expect(await screen.findByRole('img', { name: 'Mermaid diagram' })).toBeInTheDocument();
     expect(mermaidApi.initialize).toHaveBeenCalledWith(expect.objectContaining({
+      htmlLabels: false,
       securityLevel: 'strict',
       startOnLoad: false,
     }));
