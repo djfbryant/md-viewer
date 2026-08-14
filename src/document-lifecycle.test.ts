@@ -1,11 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDocumentLifecycle, type DocumentPersistence } from './document-lifecycle';
 
-function memoryPersistence(): DocumentPersistence & { documents: Map<string, { id: string; title: string; markdown: string }> } {
-  const documents = new Map<string, { id: string; title: string; markdown: string }>();
+type StoredMemoryDocument = {
+  id: string;
+  editId: string;
+  title: string;
+  markdown: string;
+  createdAt?: Date;
+  updatedAt: Date;
+};
+
+function memoryPersistence(): DocumentPersistence & { documents: Map<string, StoredMemoryDocument> } {
+  const documents = new Map<string, StoredMemoryDocument>();
   return {
     documents,
-    async save(document) { documents.set(document.id, document); return 'published'; },
+    async save(document) { documents.set(document.id, { ...documents.get(document.id), ...document }); return 'published'; },
     useShareDocument(id) {
       const document = documents.get(id);
       return document ? { kind: 'available', document } : { kind: 'unavailable' };
@@ -57,7 +66,8 @@ describe('Document lifecycle', () => {
 
   it('updates the existing document when the owner saves a revision', async () => {
     const persistence = memoryPersistence();
-    const lifecycle = createDocumentLifecycle(persistence, () => 'opaque-document-id');
+    const timestamps = [new Date('2026-08-13T12:00:00Z'), new Date('2026-08-13T13:00:00Z')];
+    const lifecycle = createDocumentLifecycle(persistence, () => 'opaque-document-id', () => timestamps.shift()!);
     const first = await lifecycle.save('# First version');
     if (first.kind !== 'published') throw new Error('Expected initial save to succeed');
 
@@ -67,6 +77,10 @@ describe('Document lifecycle', () => {
     expect(lifecycle.useShareDocument('opaque-document-id')).toEqual({
       kind: 'available',
       document: { id: 'opaque-document-id', title: 'Revised version', markdown: '# Revised version' },
+    });
+    expect(persistence.documents.get('opaque-document-id')).toMatchObject({
+      createdAt: new Date('2026-08-13T12:00:00Z'),
+      updatedAt: new Date('2026-08-13T13:00:00Z'),
     });
   });
 });

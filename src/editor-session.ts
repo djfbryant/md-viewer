@@ -34,7 +34,7 @@ function readRecovery(): Recovery {
 
 function persistRecovery(recovery: Recovery) {
   try {
-    if (recovery.markdown === recovery.publishedMarkdown) {
+    if (recovery.markdown === recovery.publishedMarkdown && !recovery.publishedId) {
       window.localStorage.removeItem(RECOVERY_KEY);
       return;
     }
@@ -45,13 +45,14 @@ function persistRecovery(recovery: Recovery) {
 }
 
 export function useEditorSession(saveDocument: (markdown: string, existing?: EditCapability) => Promise<SaveDocumentOutcome>) {
-  const recovery = useRef(readRecovery()).current;
+  const [recovery] = useState(readRecovery);
   const [markdown, setMarkdown] = useState(recovery.markdown);
   const [publishedMarkdown, setPublishedMarkdown] = useState(recovery.publishedMarkdown);
   const [publishedId, setPublishedId] = useState(recovery.publishedId);
   const [publishedEditId, setPublishedEditId] = useState(recovery.publishedEditId);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const [recoveredDraft, setRecoveredDraft] = useState(Boolean(recovery.markdown && recovery.markdown !== recovery.publishedMarkdown));
   const [savedNotice, setSavedNotice] = useState(false);
 
@@ -79,20 +80,26 @@ export function useEditorSession(saveDocument: (markdown: string, existing?: Edi
     const existing = publishedId && publishedEditId
       ? { id: publishedId, editId: publishedEditId }
       : undefined;
-    const outcome = await saveDocument(markdown, existing);
-    if (outcome.kind === 'published') {
-      setPublishedMarkdown(outcome.document.markdown);
-      setPublishedId(outcome.document.id);
-      setPublishedEditId(outcome.document.editId);
-      setRecoveredDraft(false);
-      setSavedNotice(true);
-    } else if (outcome.kind === 'not-configured') {
-      setSaveError('Saving needs an InstantDB app. Add VITE_INSTANT_APP_ID to save this document.');
-    } else {
+    try {
+      const outcome = await saveDocument(markdown, existing);
+      if (outcome.kind === 'published') {
+        setPublishedMarkdown(outcome.document.markdown);
+        setPublishedId(outcome.document.id);
+        setPublishedEditId(outcome.document.editId);
+        setRecoveredDraft(false);
+        setSavedNotice(true);
+      } else if (outcome.kind === 'not-configured') {
+        setSaveError('Saving needs an InstantDB app. Add VITE_INSTANT_APP_ID to save this document.');
+      } else {
+        setSaveError('We could not save this document. Please try again.');
+      }
+      return outcome;
+    } catch {
       setSaveError('We could not save this document. Please try again.');
+      return { kind: 'failed' };
+    } finally {
+      setIsSaving(false);
     }
-    setIsSaving(false);
-    return outcome;
   }, [markdown, publishedEditId, publishedId, saveDocument]);
 
   const importMarkdown = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
@@ -103,7 +110,7 @@ export function useEditorSession(saveDocument: (markdown: string, existing?: Edi
       setMarkdown(await file.text());
       setRecoveredDraft(false);
     } catch {
-      setSaveError('We could not import that Markdown file. Please try again.');
+      setImportError('We could not import that Markdown file. Please try again.');
     }
   }, []);
 
@@ -114,10 +121,12 @@ export function useEditorSession(saveDocument: (markdown: string, existing?: Edi
     hasUnsavedChanges,
     isSaving,
     saveError,
+    importError,
     recoveredDraft,
     savedNotice,
     dismissRecoveredDraft: () => setRecoveredDraft(false),
     dismissSaveError: () => setSaveError(null),
+    dismissImportError: () => setImportError(null),
     save,
     importMarkdown,
   };
@@ -165,6 +174,7 @@ export function useEditorSplit() {
     const amount = event.shiftKey ? 10 : 2;
     if (event.key === 'ArrowLeft') { event.preventDefault(); setSplit(applySplit(split - amount)); }
     if (event.key === 'ArrowRight') { event.preventDefault(); setSplit(applySplit(split + amount)); }
+    if (event.key === 'End') { event.preventDefault(); setSplit(applySplit(MAX_SPLIT)); }
     if (event.key === 'Home') { event.preventDefault(); resetSplit(); }
   }, [applySplit, resetSplit, split]);
 

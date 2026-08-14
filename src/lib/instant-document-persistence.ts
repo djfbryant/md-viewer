@@ -9,8 +9,8 @@ const instantDocumentPersistence: DocumentPersistence = {
       title: document.title,
       markdown: document.markdown,
       editId: document.editId,
-      createdAt: document.createdAt,
       updatedAt: document.updatedAt,
+      ...(document.createdAt ? { createdAt: document.createdAt } : {}),
     }));
     return 'published';
   },

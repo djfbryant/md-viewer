@@ -84,6 +84,22 @@ describe('editor session', () => {
     expect(await screen.findByRole('heading', { name: 'Private revision' })).toBeInTheDocument();
   });
 
+  it('retains the edit capability after a clean save and reload', async () => {
+    const first = render(<App />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Original' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+
+    first.unmount();
+    render(<App />);
+    expect(screen.getByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Original');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Revised' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+
+    expect(publishDocument).toHaveBeenLastCalledWith('# Revised', { id: 'saved-document', editId: 'private-edit-capability' });
+  });
+
   it('clamps, resets, and cleans up the accessible splitter interaction', () => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 100, bottom: 0, width: 100, height: 0, toJSON: () => ({}) });
     render(<App />);
@@ -98,22 +114,37 @@ describe('editor session', () => {
 
     fireEvent.keyDown(splitter, { key: 'ArrowLeft', shiftKey: true });
     expect(splitter).toHaveAttribute('aria-valuenow', '68');
+    fireEvent.keyDown(splitter, { key: 'End' });
+    expect(splitter).toHaveAttribute('aria-valuenow', '78');
     fireEvent.doubleClick(splitter);
     expect(splitter).toHaveAttribute('aria-valuenow', '50');
   });
 
   it('keeps editing available after a save failure and retries on the next explicit save', async () => {
-    publishDocument.mockResolvedValueOnce({ kind: 'failed' });
+    publishDocument.mockRejectedValueOnce(new Error('network unavailable'));
     render(<App />);
     fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Retry me' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
     expect(await screen.findByRole('alertdialog')).toHaveTextContent('We could not save this document. Please try again.');
-    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    const done = screen.getByRole('button', { name: 'Done' });
+    expect(done).toHaveFocus();
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled();
+    fireEvent.keyDown(done, { key: 'Escape' });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
     expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
     expect(publishDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows an import-specific error when a file cannot be read', async () => {
+    render(<App />);
+    const file = Object.assign(new File([''], 'broken.md', { type: 'text/markdown' }), { text: () => Promise.reject(new Error('unreadable')) });
+    fireEvent.change(screen.getByLabelText('Import .md'), { target: { files: [file] } });
+
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('Markdown not imported');
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('We could not import that Markdown file. Please try again.');
   });
 
   it('switches between the edit and preview tabs without replacing the draft', () => {

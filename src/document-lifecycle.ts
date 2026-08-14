@@ -23,7 +23,7 @@ export type SaveDocumentOutcome =
   | { kind: 'failed' };
 
 type StoredDocument = EditableDocument & {
-  createdAt: Date;
+  createdAt?: Date;
   updatedAt: Date;
 };
 
@@ -52,8 +52,8 @@ export function createDocumentLifecycle(
         editId: existing?.editId ?? generateId(),
         title: interpreted.title,
         markdown,
-        createdAt: timestamp,
         updatedAt: timestamp,
+        ...(existing ? {} : { createdAt: timestamp }),
       };
 
       try {
