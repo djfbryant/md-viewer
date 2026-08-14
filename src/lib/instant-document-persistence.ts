@@ -1,5 +1,15 @@
-import { createDocumentLifecycle, type DocumentPersistence, type PersistedShareOutcome } from '../document-lifecycle';
+import { documentImagePath, documentImagePrefix, imageIdFromPath } from '../document-image';
+import { createDocumentLifecycle, type DocumentPersistence, type PersistedImage, type PersistedShareOutcome } from '../document-lifecycle';
 import { createDocumentId, db } from './instant';
+
+type InstantFile = { id: string; path?: string | null; url?: string | null };
+
+function imagesFor(documentId: string, files: InstantFile[] | undefined): PersistedImage[] {
+  return (files ?? []).flatMap((file) => {
+    const id = imageIdFromPath(documentId, file.path ?? '');
+    return id && file.url ? [{ id, url: file.url }] : [];
+  });
+}
 
 const instantDocumentPersistence: DocumentPersistence = {
   async save(document) {
@@ -16,11 +26,25 @@ const instantDocumentPersistence: DocumentPersistence = {
     return 'published';
   },
 
+  async uploadImages(documentId, images) {
+    if (!db) return 'not-configured';
+    for (const image of images) {
+      await db.storage.uploadFile(documentImagePath(documentId, image.id), image.file, {
+        contentDisposition: 'inline',
+        contentType: image.file.type || 'application/octet-stream',
+      });
+    }
+    return 'uploaded';
+  },
+
   useShareDocument(id): PersistedShareOutcome {
     if (!db) return { kind: 'unavailable' };
 
     const { data, error, isLoading } = db.useQuery(
-      { documents: { $: { where: { id } } } },
+      {
+        documents: { $: { where: { id } } },
+        $files: { $: { where: { path: { $like: `${documentImagePrefix(id)}%` } } } },
+      },
       { ruleParams: { knownDocumentId: id } },
     );
 
@@ -28,23 +52,29 @@ const instantDocumentPersistence: DocumentPersistence = {
     const document = data?.documents[0];
     return error || !document
       ? { kind: 'unavailable' }
-      : { kind: 'available', document };
+      : { kind: 'available', document: { ...document, images: imagesFor(id, data.$files) } };
   },
 
   useEditDocument(editId): PersistedShareOutcome {
     if (!db) return { kind: 'unavailable' };
 
-    const { data, error, isLoading } = db.useQuery(
+    const documentQuery = db.useQuery(
       { documents: { $: { where: { editId: editId || '__none__' } } } },
       { ruleParams: { editId: editId || '__none__' } },
     );
+    const document = documentQuery.data?.documents[0];
+    const filesQuery = db.useQuery(
+      document?.id
+        ? { $files: { $: { where: { path: { $like: `${documentImagePrefix(document.id)}%` } } } } }
+        : null,
+      { ruleParams: { knownDocumentId: document?.id } },
+    );
 
     if (!editId) return { kind: 'unavailable' };
-    if (isLoading) return { kind: 'loading' };
-    const document = data?.documents[0];
-    return error || !document
+    if (documentQuery.isLoading || (document && filesQuery.isLoading)) return { kind: 'loading' };
+    return documentQuery.error || !document
       ? { kind: 'unavailable' }
-      : { kind: 'available', document };
+      : { kind: 'available', document: { ...document, images: imagesFor(document.id, filesQuery.data?.$files) } };
   },
 
   async markDeleted(id, editId, deletedAt) {

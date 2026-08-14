@@ -111,6 +111,49 @@ describe('Markdown interpretation', () => {
     expect(container.querySelector('[onerror]')).toBeNull();
   });
 
+  it('renders document-scoped images only when capability-resolved sources are provided', () => {
+    const source = '![Dashboard sketch](markshare-image:pasted-image)';
+    const unresolved = render(<MarkdownView document={interpretMarkdown(source)} />);
+    expect(unresolved.container.querySelector('img')).toBeNull();
+    expect(unresolved.getByText('Dashboard sketch')).toBeInTheDocument();
+    expect(interpretMarkdown(source).download.content).toBe(source);
+    unresolved.unmount();
+
+    const { container } = render(<MarkdownView
+      document={interpretMarkdown(source)}
+      imageSources={{ 'pasted-image': 'blob:document-image' }}
+    />);
+    expect(container.querySelector('img')).toHaveAttribute('src', 'blob:document-image');
+    expect(container.querySelector('img')).toHaveAttribute('alt', 'Dashboard sketch');
+  });
+
+  it('does not render Instant storage URLs as an alternative image seam', () => {
+    const leaked = render(<MarkdownView document={interpretMarkdown(
+      '![leaked](https://instant-storage.s3.amazonaws.com/apps/secret/photo.png)',
+    )} />);
+    expect(leaked.container.querySelector('img')).toBeNull();
+    expect(screen.getByText('leaked')).toBeInTheDocument();
+    leaked.unmount();
+
+    const { container } = render(<MarkdownView document={interpretMarkdown(
+      '![safe remote](https://cdn.example.com/photo.png)',
+    )} />);
+    expect(container.querySelector('img')).toHaveAttribute('src', 'https://cdn.example.com/photo.png');
+  });
+
+  it('does not put Instant storage URLs on rendered document images', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), { headers: { 'Content-Type': 'image/png' } })));
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:resolved-document-image');
+
+    render(<MarkdownView
+      document={interpretMarkdown('![secret](markshare-image:pasted-image)')}
+      imageSources={{ 'pasted-image': 'https://instant-storage.s3.amazonaws.com/apps/secret/photo.png' }}
+    />);
+
+    expect(await screen.findByRole('img', { name: 'secret' })).toHaveAttribute('src', 'blob:resolved-document-image');
+    expect(fetch).toHaveBeenCalledWith('https://instant-storage.s3.amazonaws.com/apps/secret/photo.png');
+  });
+
   it('renders Mermaid through the strict policy and falls back safely for invalid diagrams', async () => {
     const valid = render(<MarkdownView document={interpretMarkdown('```mermaid\ngraph TD\nA-->B\n```')} />);
 

@@ -16,27 +16,42 @@ type StoredMemoryDocument = PersistedDocument & {
 function memoryStore(): DocumentPersistence & DocumentRemovalStore & {
   documents: Map<string, StoredMemoryDocument>;
   images: Map<string, string[]>;
-  addImage(documentId: string, imageId: string): void;
+  imageUrls: Map<string, string>;
+  addImage(documentId: string, imageId: string, url?: string): void;
 } {
   const documents = new Map<string, StoredMemoryDocument>();
   const images = new Map<string, string[]>();
+  const imageUrls = new Map<string, string>();
+  const withImages = (document: StoredMemoryDocument) => ({
+    ...document,
+    images: (images.get(document.id) ?? []).map((id) => ({ id, url: imageUrls.get(id) ?? `memory://${id}` })),
+  });
   return {
     documents,
     images,
-    addImage(documentId, imageId) {
+    imageUrls,
+    addImage(documentId, imageId, url) {
       images.set(documentId, [...(images.get(documentId) ?? []), imageId]);
+      imageUrls.set(imageId, url ?? `memory://${imageId}`);
     },
     async save(document) {
       documents.set(document.id, { ...documents.get(document.id), ...document });
       return 'published';
     },
+    async uploadImages(documentId, uploaded) {
+      for (const image of uploaded) {
+        images.set(documentId, [...(images.get(documentId) ?? []), image.id]);
+        imageUrls.set(image.id, `memory://${image.id}`);
+      }
+      return 'uploaded';
+    },
     useShareDocument(id) {
       const document = documents.get(id);
-      return document ? { kind: 'available', document } : { kind: 'unavailable' };
+      return document ? { kind: 'available', document: withImages(document) } : { kind: 'unavailable' };
     },
     useEditDocument(editId) {
       const document = [...documents.values()].find((candidate) => candidate.editId === editId);
-      return document ? { kind: 'available', document } : { kind: 'unavailable' };
+      return document ? { kind: 'available', document: withImages(document) } : { kind: 'unavailable' };
     },
     async markDeleted(id, editId, deletedAt) {
       const document = documents.get(id);
@@ -93,6 +108,7 @@ describe('Document lifecycle', () => {
   it('translates a persistence failure to a generic publish failure', async () => {
     const persistence: DocumentPersistence = {
       save: vi.fn().mockRejectedValue(new Error('network error')),
+      uploadImages: vi.fn(),
       useShareDocument: () => unavailable,
       useEditDocument: () => unavailable,
       markDeleted: vi.fn(),
@@ -106,6 +122,7 @@ describe('Document lifecycle', () => {
   it('keeps a missing database configuration distinct from a failed publish', async () => {
     const lifecycle = createDocumentLifecycle({
       save: async () => 'not-configured',
+      uploadImages: async () => 'not-configured',
       useShareDocument: () => unavailable,
       useEditDocument: () => unavailable,
       markDeleted: async () => 'not-configured',
@@ -270,6 +287,81 @@ describe('Document lifecycle', () => {
     });
     expect(lifecycle.useEditDocument('wrong-edit-capability')).toEqual(unavailable);
     expect(lifecycle.useEditDocument('')).toEqual(unavailable);
+  });
+
+  it('attaches a supported image as a document-scoped markdown reference', () => {
+    const lifecycle = createDocumentLifecycle(memoryStore(), () => 'pasted-image');
+
+    expect(lifecycle.attachImage({ name: 'sketch.png', type: 'image/png', size: 12 }, 0)).toEqual({
+      kind: 'attached',
+      image: { id: 'pasted-image', markdown: '![sketch.png](markshare-image:pasted-image)' },
+    });
+  });
+
+  it('rejects unsupported types, oversized files, and a twenty-first image', () => {
+    const lifecycle = createDocumentLifecycle(memoryStore(), () => 'image-id');
+
+    expect(lifecycle.attachImage({ name: 'notes.pdf', type: 'application/pdf', size: 12 }, 0)).toEqual({ kind: 'unsupported' });
+    expect(lifecycle.attachImage({ name: 'huge.png', type: 'image/png', size: 5 * 1024 * 1024 + 1 }, 0)).toEqual({ kind: 'too-large' });
+    expect(lifecycle.attachImage({ name: 'ok.png', type: 'image/png', size: 12 }, 20)).toEqual({ kind: 'too-many' });
+    expect(lifecycle.attachImage({ name: 'ok.webp', type: 'image/webp', size: 5 * 1024 * 1024 }, 19)).toMatchObject({ kind: 'attached' });
+  });
+
+  it('rejects publishing an image that exceeds the lifecycle limits', async () => {
+    const lifecycle = createDocumentLifecycle(memoryStore(), () => 'opaque-document-id');
+
+    await expect(lifecycle.save('# Notes', undefined, {
+      images: [{ id: 'huge', file: new File([new Uint8Array(5 * 1024 * 1024 + 1)], 'huge.png', { type: 'image/png' }) }],
+    })).resolves.toEqual({ kind: 'failed' });
+    await expect(lifecycle.save('# Notes', undefined, {
+      images: [{ id: 'pdf', file: new File(['x'], 'notes.pdf', { type: 'application/pdf' }) }],
+    })).resolves.toEqual({ kind: 'failed' });
+  });
+
+  it('publishes pasted images and serves their sources only while the document is available', async () => {
+    const store = memoryStore();
+    const ids = ['opaque-document-id', 'private-edit-capability'];
+    const lifecycle = createDocumentLifecycle(store, () => ids.shift()!, () => new Date('2026-08-13T12:00:00Z'));
+    const image = { id: 'pasted-image', file: new Blob(['png'], { type: 'image/png' }) };
+
+    const published = await lifecycle.save('# Notes\n\n![sketch.png](markshare-image:pasted-image)', undefined, { images: [image] });
+    if (published.kind !== 'published') throw new Error('Expected save to succeed');
+
+    expect(store.images.get('opaque-document-id')).toEqual(['pasted-image']);
+    expect(lifecycle.useShareDocument('opaque-document-id')).toEqual({
+      kind: 'available',
+      document: {
+        id: 'opaque-document-id',
+        title: 'Notes',
+        markdown: '# Notes\n\n![sketch.png](markshare-image:pasted-image)',
+        imageSources: { 'pasted-image': 'memory://pasted-image' },
+      },
+    });
+    expect(lifecycle.useShareDocument('unknown')).toEqual(unavailable);
+  });
+
+  it('does not expose image sources for expired or deleted documents', async () => {
+    const expiry = new Date('2026-08-14T18:00:00.000Z');
+    let now = new Date('2026-08-13T12:00:00.000Z');
+    const ids = ['live-id', 'live-edit', 'gone-id', 'gone-edit'];
+    const store = memoryStore();
+    const lifecycle = createDocumentLifecycle(store, () => ids.shift()!, () => now);
+    const image = { id: 'secret-image', file: new Blob(['png'], { type: 'image/png' }) };
+
+    await lifecycle.save('# Live\n\n![live](markshare-image:secret-image)', undefined, { images: [image] });
+    const expired = await lifecycle.save('# Gone\n\n![gone](markshare-image:secret-image)', undefined, {
+      expiresAt: expiry,
+      images: [image],
+    });
+    if (expired.kind !== 'published') throw new Error('Expected save to succeed');
+
+    now = expiry;
+    expect(lifecycle.useShareDocument('live-id')).toMatchObject({
+      kind: 'available',
+      document: { imageSources: { 'secret-image': 'memory://secret-image' } },
+    });
+    expect(lifecycle.useShareDocument(expired.document.id)).toEqual(unavailable);
+    expect(lifecycle.useEditDocument(expired.document.editId)).toEqual(unavailable);
   });
 
   it('replaces a leaked edit capability while the share link continues to serve the saved document', async () => {

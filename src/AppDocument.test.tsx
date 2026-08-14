@@ -11,8 +11,16 @@ const mermaidApi = vi.hoisted(() => ({
   render: vi.fn(async () => ({ svg: '<svg role="img" viewBox="0 0 1804 200"></svg>' })),
 }));
 
-vi.mock('./lib/instant-document-persistence', () => ({
+vi.mock('./lib/instant-document-persistence', async () => {
+  const { attachDocumentImage } = await import('./document-image');
+  const imageSourcesFrom = (markdown: string) => Object.fromEntries(
+    [...markdown.matchAll(/!\[[^\]]*\]\(markshare-image:([A-Za-z0-9._-]+)\)/g)].map((match) => [match[1]!, `blob:${match[1]}`]),
+  );
+  return {
   documentLifecycle: {
+    attachImage: (file: { name: string; type: string; size: number }, count: number) => (
+      attachDocumentImage(file, count, () => `pasted-image-${count + 1}`)
+    ),
     save: vi.fn(async (markdown: string, _existing?: { id: string; editId: string }, options?: { expiresAt?: Date | null }) => {
       const document = {
         id: 'opaque-document-id',
@@ -41,17 +49,29 @@ vi.mock('./lib/instant-document-persistence', () => ({
       const document = documents.find((candidate) => candidate.id === id && !candidate.deleted);
       if (!document) return { kind: 'unavailable' };
       if (document.expiresAt && document.expiresAt.getTime() <= Date.now()) return { kind: 'unavailable' };
-      return { kind: 'available', document: { id: document.id, title: document.title, markdown: document.markdown, expiresAt: document.expiresAt } };
+      const imageSources = imageSourcesFrom(document.markdown);
+      return {
+        kind: 'available',
+        document: {
+          id: document.id,
+          title: document.title,
+          markdown: document.markdown,
+          expiresAt: document.expiresAt,
+          ...(Object.keys(imageSources).length ? { imageSources } : {}),
+        },
+      };
     },
     useEditDocument: (editId: string) => {
       if (!editId) return { kind: 'unavailable' };
       const document = documents.find((candidate) => candidate.editId === editId && !candidate.deleted);
       if (!document) return { kind: 'unavailable' };
       if (document.expiresAt && document.expiresAt.getTime() <= Date.now()) return { kind: 'unavailable' };
-      return { kind: 'available', document };
+      const imageSources = imageSourcesFrom(document.markdown);
+      return { kind: 'available', document: { ...document, ...(Object.keys(imageSources).length ? { imageSources } : {}) } };
     },
   },
-}));
+  };
+});
 
 vi.mock('mermaid', () => ({ default: mermaidApi }));
 
@@ -292,5 +312,54 @@ describe('basic anonymous documents', () => {
     expect(await screen.findByText('Read only')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
     expect(screen.queryByText(/\/e\//)).not.toBeInTheDocument();
+  });
+
+  it('pastes a private image into the editor and renders it on the share link', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    const editor = screen.getByRole('textbox', { name: /markdown document/i }) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: '# Illustrated notes' } });
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    fireEvent.paste(editor, {
+      clipboardData: {
+        files: [new File([new Uint8Array([1, 2, 3])], 'sketch.png', { type: 'image/png' })],
+      },
+    });
+
+    expect(editor).toHaveValue('# Illustrated notes\n\n![sketch.png](markshare-image:pasted-image-1)\n');
+    expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-preview');
+    expect(screen.getByText('1/20 images')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /open share link/i }));
+    expect(await screen.findByText('Read only')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-image-1');
+  });
+
+  it('drops a supported image into the editor', () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:dropped-preview');
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    const editor = screen.getByRole('textbox', { name: /markdown document/i });
+    fireEvent.drop(editor, {
+      dataTransfer: { files: [new File([new Uint8Array([1])], 'photo.webp', { type: 'image/webp' })] },
+    });
+
+    expect(editor).toHaveValue('![photo.webp](markshare-image:pasted-image-1)\n');
+    expect(screen.getByRole('img', { name: 'photo.webp' })).toHaveAttribute('src', 'blob:dropped-preview');
+  });
+
+  it('explains when a pasted image is larger than the limit', () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    const oversized = new File([new Uint8Array(8)], 'huge.png', { type: 'image/png' });
+    Object.defineProperty(oversized, 'size', { value: 5 * 1024 * 1024 + 1 });
+    fireEvent.paste(screen.getByRole('textbox', { name: /markdown document/i }), {
+      clipboardData: { files: [oversized] },
+    });
+
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Each image must be 5 MB or smaller.');
+    expect(screen.queryByRole('img', { name: 'huge.png' })).not.toBeInTheDocument();
   });
 });

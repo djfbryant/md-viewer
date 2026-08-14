@@ -10,6 +10,7 @@ const publishDocument = vi.hoisted(() => vi.fn(async (markdown: string, existing
 
 vi.mock('./lib/instant-document-persistence', () => ({
   documentLifecycle: {
+    attachImage: () => ({ kind: 'unsupported' as const }),
     save: publishDocument,
     delete: vi.fn(async () => ({ kind: 'deleted' as const })),
     rotate: vi.fn(async (existing: { id: string; editId: string }) => ({ kind: 'rotated' as const, document: { id: existing.id, editId: 'replacement-edit-capability' } })),
