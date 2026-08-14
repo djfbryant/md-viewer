@@ -416,16 +416,22 @@ function mermaidSource(children: ReactNode) {
 
 const DocumentImageContext = createContext<Record<string, string>>({});
 
+function isLocalImageSrc(src: string) {
+  return src.startsWith('blob:') || src.startsWith('data:');
+}
+
 function usePrivateImageSrc(src: string | undefined) {
-  const local = Boolean(src && (src.startsWith('blob:') || src.startsWith('data:')));
   const [remoteSrc, setRemoteSrc] = useState<string | undefined>();
+  const localFallback = useRef<string | undefined>();
+
+  if (src && isLocalImageSrc(src)) localFallback.current = src;
+  if (!src) localFallback.current = undefined;
 
   useEffect(() => {
-    if (!src || src.startsWith('blob:') || src.startsWith('data:')) {
+    if (!src || isLocalImageSrc(src)) {
       setRemoteSrc(undefined);
       return;
     }
-    setRemoteSrc(undefined);
     let objectUrl: string | undefined;
     let cancelled = false;
     fetch(src)
@@ -448,7 +454,8 @@ function usePrivateImageSrc(src: string | undefined) {
   }, [src]);
 
   if (!src) return undefined;
-  return local ? src : remoteSrc;
+  if (isLocalImageSrc(src)) return src;
+  return remoteSrc ?? localFallback.current;
 }
 
 function MarkdownImage({ alt, src, ...props }: { alt?: string; src?: string } & Record<string, unknown>) {

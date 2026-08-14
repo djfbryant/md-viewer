@@ -142,6 +142,8 @@ export function useEditorSession(
     : undefined;
   const publishedImageCount = Object.keys(existing?.imageSources ?? {}).length;
   const imageCount = publishedImageCount + pendingImages.filter((image) => !existing?.imageSources?.[image.id]).length;
+  // Stored sources win. Preview blobs stay until unmount or document switch so a
+  // remote Instant URL can fetch without revoking the still-visible preview.
   const imageSources = useMemo(() => ({
     ...Object.fromEntries(pendingImages.map((image) => [image.id, image.previewUrl])),
     ...existing?.imageSources,
@@ -172,15 +174,6 @@ export function useEditorSession(
   useEffect(() => {
     persistRecovery(publishedEditId ?? routeEditId ?? null, { markdown, publishedMarkdown, publishedId, publishedEditId });
   }, [markdown, publishedEditId, publishedId, publishedMarkdown, routeEditId]);
-
-  useEffect(() => {
-    const sources = existing?.imageSources;
-    if (!sources) return;
-    const dropping = pendingImagesRef.current.filter((image) => sources[image.id]);
-    if (!dropping.length) return;
-    dropping.forEach((image) => URL.revokeObjectURL(image.previewUrl));
-    setPendingImages((current) => current.filter((image) => !sources[image.id]));
-  }, [existing?.imageSources]);
 
   useEffect(() => {
     if (!savedNotice) return;
