@@ -24,6 +24,7 @@
   "homepage": "https://github.com/djfbryant/md-viewer#readme",
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
+    "@instantdb/admin": "^1.0.65",
     "@instantdb/react": "^1.0.65",
     "dompurify": "^3.4.13",
     "mermaid": "^11.16.1",

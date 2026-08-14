@@ -9,6 +9,7 @@ describe('responsive shell contract', () => {
     expect(styles).toContain('html, body, #root { height: 100%; overflow: hidden; }');
     expect(styles).toContain('@media (max-width: 899px)');
     expect(styles).toContain('@media (max-width: 619px)');
+    expect(styles).toContain('.reader-expiry { display: none; }');
   });
 
   it.each([1920, 1440, 1280, 1024, 900])('keeps the split layout at %ipx', (width) => {

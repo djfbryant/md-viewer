@@ -1,4 +1,4 @@
-import { createDocumentLifecycle, type DocumentPersistence, type ShareDocumentOutcome } from '../document-lifecycle';
+import { createDocumentLifecycle, type DocumentPersistence, type PersistedShareOutcome } from '../document-lifecycle';
 import { createDocumentId, db } from './instant';
 
 const instantDocumentPersistence: DocumentPersistence = {
@@ -11,11 +11,12 @@ const instantDocumentPersistence: DocumentPersistence = {
       editId: document.editId,
       updatedAt: document.updatedAt,
       ...(document.createdAt ? { createdAt: document.createdAt } : {}),
+      ...('expiresAt' in document ? { expiresAt: document.expiresAt } : {}),
     }));
     return 'published';
   },
 
-  useShareDocument(id): ShareDocumentOutcome {
+  useShareDocument(id): PersistedShareOutcome {
     if (!db) return { kind: 'unavailable' };
 
     const { data, error, isLoading } = db.useQuery(
@@ -28,6 +29,16 @@ const instantDocumentPersistence: DocumentPersistence = {
     return error || !document
       ? { kind: 'unavailable' }
       : { kind: 'available', document };
+  },
+
+  async markDeleted(id, editId, deletedAt) {
+    if (!db) return 'not-configured';
+
+    await db.transact(db.tx.documents[id].ruleParams({ knownDocumentId: id, editId }).update({
+      deletedAt,
+      updatedAt: deletedAt,
+    }));
+    return 'deleted';
   },
 };
 

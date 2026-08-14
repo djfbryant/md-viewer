@@ -9,6 +9,8 @@ const schema = i.graph({
     editId: i.string(),
     createdAt: i.date(),
     updatedAt: i.date(),
+    expiresAt: i.date().optional(),
+    deletedAt: i.date().optional(),
   }),
 }, {});
 

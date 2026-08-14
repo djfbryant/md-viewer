@@ -1,9 +1,12 @@
 import { interpretMarkdown } from './markdown';
 
+export type InstantDate = Date | number | string;
+
 export type SharedDocument = {
   id: string;
   title: string;
   markdown: string;
+  expiresAt?: Date;
 };
 
 export type EditableDocument = SharedDocument & {
@@ -11,6 +14,10 @@ export type EditableDocument = SharedDocument & {
 };
 
 export type EditCapability = Pick<EditableDocument, 'id' | 'editId'>;
+
+export type SaveDocumentOptions = {
+  expiresAt?: Date | null;
+};
 
 export type ShareDocumentOutcome =
   | { kind: 'loading' }
@@ -22,31 +29,90 @@ export type SaveDocumentOutcome =
   | { kind: 'not-configured' }
   | { kind: 'failed' };
 
-type StoredDocument = EditableDocument & {
+export type DeleteDocumentOutcome =
+  | { kind: 'deleted' }
+  | { kind: 'not-configured' }
+  | { kind: 'failed' };
+
+export type CleanupDocumentOutcome =
+  | { kind: 'cleaned'; removed: Array<{ documentId: string; imageCount: number }> }
+  | { kind: 'not-configured' }
+  | { kind: 'failed' };
+
+export type PersistedDocument = {
+  id: string;
+  title: string;
+  markdown: string;
+  editId?: string;
+  expiresAt?: InstantDate | null;
+  deletedAt?: InstantDate | null;
+};
+
+export type PersistedShareOutcome =
+  | { kind: 'loading' }
+  | { kind: 'unavailable' }
+  | { kind: 'available'; document: PersistedDocument };
+
+type StoredDocument = {
+  id: string;
+  editId: string;
+  title: string;
+  markdown: string;
   createdAt?: Date;
   updatedAt: Date;
+  expiresAt?: Date | null;
+  deletedAt?: Date | null;
+};
+
+export type RemovableDocument = {
+  id: string;
+  expiresAt?: InstantDate | null;
+  deletedAt?: InstantDate | null;
+  imageIds: string[];
 };
 
 export interface DocumentPersistence {
   save(document: StoredDocument): Promise<'published' | 'not-configured'>;
-  useShareDocument(id: string): ShareDocumentOutcome;
+  useShareDocument(id: string): PersistedShareOutcome;
+  markDeleted(id: string, editId: string, deletedAt: Date): Promise<'deleted' | 'not-configured'>;
+}
+
+export interface DocumentRemovalStore {
+  listDocuments(): Promise<RemovableDocument[]>;
+  removeDocumentAndImages(id: string, imageIds: string[]): Promise<void>;
 }
 
 export interface DocumentLifecycle {
-  save(markdown: string, existing?: EditCapability): Promise<SaveDocumentOutcome>;
+  save(markdown: string, existing?: EditCapability, options?: SaveDocumentOptions): Promise<SaveDocumentOutcome>;
   useShareDocument(id: string): ShareDocumentOutcome;
+  delete(existing: EditCapability): Promise<DeleteDocumentOutcome>;
+  cleanup(): Promise<CleanupDocumentOutcome>;
+}
+
+export function toDate(value: InstantDate | null | undefined): Date | null {
+  if (value == null || value === '') return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function isDocumentUnavailable(document: Pick<PersistedDocument, 'expiresAt' | 'deletedAt'>, at: Date): boolean {
+  if (toDate(document.deletedAt)) return true;
+  const expiresAt = toDate(document.expiresAt);
+  return expiresAt != null && expiresAt.getTime() <= at.getTime();
 }
 
 export function createDocumentLifecycle(
   persistence: DocumentPersistence,
   generateId: () => string,
   now: () => Date = () => new Date(),
+  removal?: DocumentRemovalStore,
 ): DocumentLifecycle {
   return {
-    async save(markdown, existing) {
+    async save(markdown, existing, options) {
       const id = existing?.id ?? generateId();
       const timestamp = now();
       const interpreted = interpretMarkdown(markdown);
+      const expiresAt = options && 'expiresAt' in options ? options.expiresAt : undefined;
       const document = {
         id,
         editId: existing?.editId ?? generateId(),
@@ -54,6 +120,7 @@ export function createDocumentLifecycle(
         markdown,
         updatedAt: timestamp,
         ...(existing ? {} : { createdAt: timestamp }),
+        ...(expiresAt !== undefined ? { expiresAt } : {}),
       };
 
       try {
@@ -61,7 +128,13 @@ export function createDocumentLifecycle(
         if (result === 'not-configured') return { kind: 'not-configured' };
         return {
           kind: 'published',
-          document: { id: document.id, editId: document.editId, title: document.title, markdown: document.markdown },
+          document: {
+            id: document.id,
+            editId: document.editId,
+            title: document.title,
+            markdown: document.markdown,
+            ...(expiresAt ? { expiresAt } : {}),
+          },
         };
       } catch {
         return { kind: 'failed' };
@@ -70,14 +143,44 @@ export function createDocumentLifecycle(
     useShareDocument(id) {
       const outcome = persistence.useShareDocument(id);
       if (outcome.kind !== 'available') return outcome;
+      if (isDocumentUnavailable(outcome.document, now())) return { kind: 'unavailable' };
+      const expiresAt = toDate(outcome.document.expiresAt);
       return {
         kind: 'available',
         document: {
           id: outcome.document.id,
           title: outcome.document.title,
           markdown: outcome.document.markdown,
+          ...(expiresAt ? { expiresAt } : {}),
         },
       };
     },
+    async delete(existing) {
+      try {
+        const result = await persistence.markDeleted(existing.id, existing.editId, now());
+        if (result === 'not-configured') return { kind: 'not-configured' };
+        return { kind: 'deleted' };
+      } catch {
+        return { kind: 'failed' };
+      }
+    },
+    async cleanup() {
+      if (!removal) return { kind: 'not-configured' };
+      return cleanupDueDocuments(removal, now());
+    },
   };
+}
+
+export async function cleanupDueDocuments(removal: DocumentRemovalStore, at: Date): Promise<CleanupDocumentOutcome> {
+  try {
+    const removed: Array<{ documentId: string; imageCount: number }> = [];
+    for (const document of await removal.listDocuments()) {
+      if (!isDocumentUnavailable(document, at)) continue;
+      await removal.removeDocumentAndImages(document.id, document.imageIds);
+      removed.push({ documentId: document.id, imageCount: document.imageIds.length });
+    }
+    return { kind: 'cleaned', removed };
+  } catch {
+    return { kind: 'failed' };
+  }
 }

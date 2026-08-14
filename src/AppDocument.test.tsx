@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const documents = vi.hoisted(() => {
-  const documents: Array<{ id: string; title: string; markdown: string }> = [];
+  const documents: Array<{ id: string; title: string; markdown: string; expiresAt?: Date; deleted?: boolean }> = [];
   return documents;
 });
 
@@ -13,14 +13,29 @@ const mermaidApi = vi.hoisted(() => ({
 
 vi.mock('./lib/instant-document-persistence', () => ({
   documentLifecycle: {
-    save: vi.fn(async (markdown: string) => {
-      const document = { id: 'opaque-document-id', editId: 'private-edit-capability', title: markdown.startsWith('# ') ? markdown.split('\n')[0].slice(2) : 'Untitled document', markdown };
-      documents.push(document);
+    save: vi.fn(async (markdown: string, _existing?: { id: string; editId: string }, options?: { expiresAt?: Date | null }) => {
+      const document = {
+        id: 'opaque-document-id',
+        editId: 'private-edit-capability',
+        title: markdown.startsWith('# ') ? markdown.split('\n')[0].slice(2) : 'Untitled document',
+        markdown,
+        ...(options?.expiresAt ? { expiresAt: options.expiresAt } : {}),
+      };
+      const existing = documents.find((candidate) => candidate.id === document.id);
+      if (existing) Object.assign(existing, document);
+      else documents.push(document);
       return { kind: 'published', document };
     }),
+    delete: vi.fn(async () => {
+      const document = documents.find((candidate) => candidate.id === 'opaque-document-id');
+      if (document) document.deleted = true;
+      return { kind: 'deleted' };
+    }),
     useShareDocument: (id: string) => {
-      const document = documents.find((candidate) => candidate.id === id);
-      return document ? { kind: 'available', document } : { kind: 'unavailable' };
+      const document = documents.find((candidate) => candidate.id === id && !candidate.deleted);
+      if (!document) return { kind: 'unavailable' };
+      if (document.expiresAt && document.expiresAt.getTime() <= Date.now()) return { kind: 'unavailable' };
+      return { kind: 'available', document };
     },
   },
 }));
@@ -121,5 +136,62 @@ describe('basic anonymous documents', () => {
     expect(document.title).toBe('MarkShare');
     expect(screen.queryByText('Hello reader')).not.toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: /markdown document/i })).not.toBeInTheDocument();
+  });
+
+  it('shows a configured expiry on the share link and uses the same unavailable page after delete', async () => {
+    const markdown = '# Expiring notes';
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: markdown } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+
+    expect(screen.getByText('Never expires')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    fireEvent.change(screen.getByLabelText('Expiry date and time'), { target: { value: '2026-08-14T18:00' } });
+    expect(await screen.findAllByText(/Expires /)).not.toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
+    expect(await screen.findByText('Read only')).toBeInTheDocument();
+    expect(screen.getByText(/Expires /)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Expiring notes' })).toBeInTheDocument();
+  });
+
+  it('shows the same unavailable response for an expired share link', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Expired notes' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    fireEvent.change(screen.getByLabelText('Expiry date and time'), { target: { value: '2020-01-01T00:00' } });
+    expect(await screen.findAllByText(/Expires /)).not.toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
+
+    expect(await screen.findByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();
+    expect(screen.getByText('This share link is invalid or the document is no longer available.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Expired notes' })).not.toBeInTheDocument();
+  });
+
+  it('shows the same unavailable response after a document is deleted', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Secret notes' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete document' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete document' }));
+
+    expect(await screen.findByRole('button', { name: /create a document/i })).toBeInTheDocument();
+    window.history.replaceState({}, '', '/s/opaque-document-id');
+    fireEvent.popState(window);
+    expect(await screen.findByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();
+    expect(screen.getByText('This share link is invalid or the document is no longer available.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Secret notes' })).not.toBeInTheDocument();
   });
 });

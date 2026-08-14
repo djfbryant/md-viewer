@@ -11,6 +11,7 @@ const publishDocument = vi.hoisted(() => vi.fn(async (markdown: string, existing
 vi.mock('./lib/instant-document-persistence', () => ({
   documentLifecycle: {
     save: publishDocument,
+    delete: vi.fn(async () => ({ kind: 'deleted' as const })),
     useShareDocument: (id: string) => {
       const document = documents.get(id);
       return document ? { kind: 'available', document } : { kind: 'unavailable' };
@@ -79,7 +80,7 @@ describe('editor session', () => {
     expect(await screen.findByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Private revision');
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await screen.findByText('Changes saved.');
-    expect(publishDocument).toHaveBeenLastCalledWith('# Private revision', expect.objectContaining({ id: 'saved-document', editId: 'private-edit-capability' }));
+    expect(publishDocument).toHaveBeenLastCalledWith('# Private revision', expect.objectContaining({ id: 'saved-document', editId: 'private-edit-capability' }), { expiresAt: null });
     fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
     expect(await screen.findByRole('heading', { name: 'Private revision' })).toBeInTheDocument();
   });
@@ -97,7 +98,7 @@ describe('editor session', () => {
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await screen.findByText('Changes saved.');
 
-    expect(publishDocument).toHaveBeenLastCalledWith('# Separate', undefined);
+    expect(publishDocument).toHaveBeenLastCalledWith('# Separate', undefined, { expiresAt: null });
   });
 
   it('clamps, resets, and cleans up the accessible splitter interaction', () => {
