@@ -203,8 +203,10 @@ function ShareRoute({ documentId }: { documentId: string }) {
   useEffect(() => {
     if (outcome.kind !== 'available' || !outcome.document.expiresAt) return;
     const delay = outcome.document.expiresAt.getTime() - Date.now();
-    if (delay > 2_147_483_647) return;
-    const timeout = window.setTimeout(() => setTick((tick) => tick + 1), Math.max(0, delay));
+    const timeout = window.setTimeout(
+      () => setTick((tick) => tick + 1),
+      Math.min(Math.max(0, delay), 2_147_483_647),
+    );
     return () => window.clearTimeout(timeout);
   }, [outcome]);
 
