@@ -179,17 +179,6 @@ export function useEditorSession(
   }, [markdown, publishedEditId, publishedId, publishedMarkdown, routeEditId]);
 
   useEffect(() => {
-    setPendingImages((current) => {
-      const next = current.filter((image) => referencedImageIds.has(image.id));
-      if (next.length === current.length) return current;
-      current.forEach((image) => {
-        if (!referencedImageIds.has(image.id)) URL.revokeObjectURL(image.previewUrl);
-      });
-      return next;
-    });
-  }, [referencedImageIds]);
-
-  useEffect(() => {
     if (!savedNotice) return;
     const timeout = window.setTimeout(() => setSavedNotice(false), 1900);
     return () => window.clearTimeout(timeout);
@@ -224,7 +213,9 @@ export function useEditorSession(
         setRecoveredDraft(false);
         setSavedNotice(true);
         rememberEditAccess(outcome.document.id, outcome.document.editId);
-        setPendingImages((current) => current.map((image) => ({ id: image.id, previewUrl: image.previewUrl, uploaded: true })));
+        setPendingImages((current) => current.map((image) => (
+          referencedImageIds.has(image.id) ? { id: image.id, previewUrl: image.previewUrl, uploaded: true } : image
+        )));
         if (!capability) persistRecovery(null, emptyRecovery);
       } else if (outcome.kind === 'not-configured') {
         setSaveError('Saving needs an InstantDB app. Add VITE_INSTANT_APP_ID to save this document.');

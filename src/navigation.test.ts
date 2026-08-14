@@ -3,6 +3,8 @@ import { editPath, recognizeRoute, sharePath } from './navigation';
 
 describe('document routes', () => {
   it('round-trips opaque share and edit IDs and keeps their capabilities distinct', () => {
+    expect(sharePath('opaque id')).toBe('/s/opaque%20id');
+    expect(recognizeRoute('/s/opaque%20id')).toEqual({ kind: 'share', documentId: 'opaque id' });
     expect(recognizeRoute(sharePath('opaque id'))).toEqual({ kind: 'share', documentId: 'opaque id' });
     expect(recognizeRoute(editPath('private edit'))).toEqual({ kind: 'edit', editId: 'private edit' });
     expect(recognizeRoute(sharePath('private edit'))).toEqual({ kind: 'share', documentId: 'private edit' });

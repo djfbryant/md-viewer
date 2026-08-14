@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FocusEvent, type MouseEvent } from 'react';
 import { formatExpiry, toDatetimeLocalValue } from './document';
 import { type SharedDocument } from './document-lifecycle';
 import { MAX_IMAGES_PER_DOCUMENT } from './document-image';
@@ -43,13 +43,13 @@ function SiteLinks({ current, onNavigate }: { current?: InfoPage; onNavigate: (p
   );
 }
 
-function LinkBox({ label, value }: { label: string; value: string }) {
-  const selectValue = (event: { currentTarget: HTMLInputElement }) => {
+function LinkBox({ label, value, className = 'link-box' }: { label: string; value: string; className?: string }) {
+  const selectValue = (event: FocusEvent<HTMLInputElement> | MouseEvent<HTMLInputElement>) => {
     event.currentTarget.select();
   };
   return (
     <input
-      className="link-box"
+      className={className}
       readOnly
       value={value}
       aria-label={label}
@@ -271,7 +271,9 @@ function Editor({
         <span>{markdown.trim() ? `${markdown.trim().split(/\s+/).length} words` : 'Draft document'}</span>
         <span>{imageCount}/{MAX_IMAGES_PER_DOCUMENT} images</span>
         <span>{formatExpiry(session.expiresAt)}</span>
-        <span className="status-url">{session.publishedId ? shareUrl(session.publishedId) : 'Save to create a share link'}</span>
+        {session.publishedId
+          ? <LinkBox className="status-url" label="Share URL" value={shareUrl(session.publishedId)} />
+          : <span className="status-url">Save to create a share link</span>}
       </footer>
       {session.recoveredDraft && <div className="toast" role="status">Recovered unsaved local draft.<button className="toast-dismiss" onClick={session.dismissRecoveredDraft} aria-label="Dismiss recovery message">×</button></div>}
       {session.saveError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="save-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissSaveError(); }}><h2 id="save-error-title">Document not saved</h2><p>{session.saveError}</p><button autoFocus className="button button--primary" onClick={session.dismissSaveError}>Done</button></section></div>}
