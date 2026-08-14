@@ -111,11 +111,9 @@ function Editor({
     return () => window.removeEventListener('keydown', saveWithShortcut);
   }, [isSaving, publish]);
 
-  if (editId && remote.kind === 'loading' && !session.publishedEditId) {
+  if (editId && session.publishedEditId !== editId) {
+    if (remote.kind === 'unavailable') return <MissingDocument />;
     return <ReaderLayout><section className="reader-message"><p>Opening document…</p></section></ReaderLayout>;
-  }
-  if (editId && remote.kind === 'unavailable' && session.publishedEditId !== editId) {
-    return <MissingDocument />;
   }
 
   return (

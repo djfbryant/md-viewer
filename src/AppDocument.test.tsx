@@ -161,7 +161,7 @@ describe('basic anonymous documents', () => {
 
     expect(screen.getByText('Never expires')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
-    fireEvent.change(screen.getByLabelText('Expiry date and time'), { target: { value: '2026-08-14T18:00' } });
+    fireEvent.change(screen.getByLabelText('Expiry date and time'), { target: { value: '2099-01-01T12:00' } });
     expect(await screen.findAllByText(/Expires /)).not.toHaveLength(0);
 
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
@@ -261,6 +261,21 @@ describe('basic anonymous documents', () => {
     window.history.replaceState({}, '', '/e/replacement-edit-capability');
     fireEvent.popState(window);
     expect(await screen.findByRole('textbox', { name: /markdown document/i })).toHaveValue('# Kept notes');
+  });
+
+  it('does not keep the previous document visible when opening a different edit link', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Kept notes' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+
+    documents.push({ id: 'other-document-id', editId: 'other-edit-capability', title: 'Other notes', markdown: '# Other notes' });
+    window.history.replaceState({}, '', '/e/other-edit-capability');
+    fireEvent.popState(window);
+
+    expect(screen.queryByDisplayValue('# Kept notes')).not.toBeInTheDocument();
+    expect(await screen.findByRole('textbox', { name: /markdown document/i })).toHaveValue('# Other notes');
   });
 
   it('does not disclose an edit control on a share link in a browser that never saved the document', async () => {
