@@ -1,14 +1,17 @@
 import type { InstantRules } from '@instantdb/react';
 
-// A document is visible only when the requester provides its opaque ID. This
-// makes the Share Link a capability instead of exposing a browsable document list.
+// A document is visible only when the requester provides its opaque ID. The
+// private edit capability is never returned to Share Link holders.
 const rules = {
   documents: {
     allow: {
       create: 'true',
       view: 'data.id == ruleParams.knownDocumentId',
-      update: 'false',
+      update: 'data.editId == ruleParams.editId && newData.editId == data.editId',
       delete: 'false',
+    },
+    fields: {
+      editId: 'false',
     },
   },
 } satisfies InstantRules;
