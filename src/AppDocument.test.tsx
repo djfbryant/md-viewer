@@ -1,10 +1,12 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const documents = vi.hoisted(() => {
   const documents: Array<{ id: string; editId: string; title: string; markdown: string; expiresAt?: Date; deleted?: boolean }> = [];
   return documents;
 });
+
+const imageSourceKind = vi.hoisted(() => ({ remote: false }));
 
 const mermaidApi = vi.hoisted(() => ({
   initialize: vi.fn(),
@@ -14,7 +16,12 @@ const mermaidApi = vi.hoisted(() => ({
 vi.mock('./lib/instant-document-persistence', async () => {
   const { attachDocumentImage } = await import('./document-image');
   const imageSourcesFrom = (markdown: string) => Object.fromEntries(
-    [...markdown.matchAll(/!\[[^\]]*\]\(markshare-image:([A-Za-z0-9._-]+)\)/g)].map((match) => [match[1]!, `blob:${match[1]}`]),
+    [...markdown.matchAll(/!\[[^\]]*\]\(markshare-image:([A-Za-z0-9._-]+)\)/g)].map((match) => [
+      match[1]!,
+      imageSourceKind.remote
+        ? `https://instant-storage.s3.amazonaws.com/apps/secret/${match[1]}.png`
+        : `blob:${match[1]}`,
+    ]),
   );
   return {
   documentLifecycle: {
@@ -89,6 +96,7 @@ beforeEach(() => {
     },
   });
   documents.length = 0;
+  imageSourceKind.remote = false;
   window.history.replaceState({}, '', '/');
   window.matchMedia = vi.fn().mockImplementation(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
 });
@@ -96,6 +104,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('basic anonymous documents', () => {
@@ -334,12 +343,44 @@ describe('basic anonymous documents', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:pasted-preview');
-    expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-image-1');
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-image-1');
+    });
+    expect(revokeObjectURL).not.toHaveBeenCalledWith('blob:pasted-preview');
 
     fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
     expect(await screen.findByText('Read only')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-image-1');
+  });
+
+  it('keeps the pasted preview visible until a stored Instant image can be fetched', async () => {
+    imageSourceKind.remote = true;
+    vi.spyOn(URL, 'createObjectURL')
+      .mockReturnValueOnce('blob:pasted-preview')
+      .mockReturnValue('blob:resolved-stored-image');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), { headers: { 'Content-Type': 'image/png' } })));
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    const editor = screen.getByRole('textbox', { name: /markdown document/i }) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: '# Illustrated notes' } });
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    fireEvent.paste(editor, {
+      clipboardData: {
+        files: [new File([new Uint8Array([1, 2, 3])], 'sketch.png', { type: 'image/png' })],
+      },
+    });
+
+    expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-preview');
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-preview');
+    expect(revokeObjectURL).not.toHaveBeenCalledWith('blob:pasted-preview');
+    expect(await screen.findByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:resolved-stored-image');
+
+    fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
+    expect(await screen.findByText('Read only')).toBeInTheDocument();
+    expect(await screen.findByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:resolved-stored-image');
   });
 
   it('drops a supported image into the editor', () => {

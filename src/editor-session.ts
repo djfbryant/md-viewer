@@ -96,7 +96,7 @@ function insertSnippet(markdown: string, snippet: string, start: number, end: nu
 }
 
 type PendingImage = {
-  file: File;
+  file?: File;
   id: string;
   previewUrl: string;
   uploaded: boolean;
@@ -142,9 +142,11 @@ export function useEditorSession(
     : undefined;
   const publishedImageCount = Object.keys(existing?.imageSources ?? {}).length;
   const imageCount = publishedImageCount + pendingImages.filter((image) => !existing?.imageSources?.[image.id]).length;
+  // Stored sources win. Preview blobs stay until unmount or document switch so a
+  // remote Instant URL can fetch without revoking the still-visible preview.
   const imageSources = useMemo(() => ({
-    ...existing?.imageSources,
     ...Object.fromEntries(pendingImages.map((image) => [image.id, image.previewUrl])),
+    ...existing?.imageSources,
   }), [existing?.imageSources, pendingImages]);
 
   useEffect(() => {
@@ -174,15 +176,6 @@ export function useEditorSession(
   }, [markdown, publishedEditId, publishedId, publishedMarkdown, routeEditId]);
 
   useEffect(() => {
-    const sources = existing?.imageSources;
-    if (!sources) return;
-    const dropping = pendingImagesRef.current.filter((image) => sources[image.id]);
-    if (!dropping.length) return;
-    dropping.forEach((image) => URL.revokeObjectURL(image.previewUrl));
-    setPendingImages((current) => current.filter((image) => !sources[image.id]));
-  }, [existing?.imageSources]);
-
-  useEffect(() => {
     if (!savedNotice) return;
     const timeout = window.setTimeout(() => setSavedNotice(false), 1900);
     return () => window.clearTimeout(timeout);
@@ -199,7 +192,9 @@ export function useEditorSession(
     setSaveError(null);
     const nextExpiry = options && 'expiresAt' in options ? options.expiresAt ?? null : expiresAt;
     try {
-      const images = pendingImages.filter((image) => !image.uploaded).map((image) => ({ id: image.id, file: image.file }));
+      const images = pendingImages
+        .filter((image): image is PendingImage & { file: File } => !image.uploaded && Boolean(image.file))
+        .map((image) => ({ id: image.id, file: image.file }));
       const outcome = await lifecycle.save(markdown, capability, {
         expiresAt: nextExpiry,
         ...(images.length ? { images } : {}),
@@ -213,7 +208,7 @@ export function useEditorSession(
         setRecoveredDraft(false);
         setSavedNotice(true);
         rememberEditAccess(outcome.document.id, outcome.document.editId);
-        setPendingImages((current) => current.map((image) => ({ ...image, uploaded: true })));
+        setPendingImages((current) => current.map((image) => ({ id: image.id, previewUrl: image.previewUrl, uploaded: true })));
         if (!capability) persistRecovery(null, emptyRecovery);
       } else if (outcome.kind === 'not-configured') {
         setSaveError('Saving needs an InstantDB app. Add VITE_INSTANT_APP_ID to save this document.');
