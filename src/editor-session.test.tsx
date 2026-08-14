@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const documents = vi.hoisted(() => new Map<string, { id: string; title: string; markdown: string }>());
+const documents = vi.hoisted(() => new Map<string, { id: string; editId: string; title: string; markdown: string }>());
 const publishDocument = vi.hoisted(() => vi.fn(async (markdown: string, existing?: { id: string; editId: string }): Promise<{ kind: 'published'; document: { id: string; editId: string; title: string; markdown: string } } | { kind: 'failed' }> => {
   const document = { id: existing?.id ?? 'saved-document', editId: existing?.editId ?? 'private-edit-capability', title: 'Saved document', markdown };
   documents.set(document.id, document);
@@ -12,8 +12,14 @@ vi.mock('./lib/instant-document-persistence', () => ({
   documentLifecycle: {
     save: publishDocument,
     delete: vi.fn(async () => ({ kind: 'deleted' as const })),
+    rotate: vi.fn(async (existing: { id: string; editId: string }) => ({ kind: 'rotated' as const, document: { id: existing.id, editId: 'replacement-edit-capability' } })),
     useShareDocument: (id: string) => {
       const document = documents.get(id);
+      return document ? { kind: 'available', document: { id: document.id, title: document.title, markdown: document.markdown } } : { kind: 'unavailable' };
+    },
+    useEditDocument: (editId: string) => {
+      if (!editId) return { kind: 'unavailable' };
+      const document = [...documents.values()].find((candidate) => candidate.editId === editId);
       return document ? { kind: 'available', document } : { kind: 'unavailable' };
     },
   },
@@ -75,7 +81,7 @@ describe('editor session', () => {
     expect(await screen.findByRole('heading', { name: 'Imported' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Private revision' })).not.toBeInTheDocument();
 
-    window.history.replaceState({}, '', '/new');
+    window.history.replaceState({}, '', '/e/private-edit-capability');
     fireEvent.popState(window);
     expect(await screen.findByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Private revision');
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
@@ -92,6 +98,7 @@ describe('editor session', () => {
     await screen.findByText('Changes saved.');
 
     first.unmount();
+    window.history.replaceState({}, '', '/new');
     render(<App />);
     expect(screen.getByRole('textbox', { name: 'Markdown document' })).toHaveValue('');
     fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Separate' } });
@@ -99,6 +106,37 @@ describe('editor session', () => {
     await screen.findByText('Changes saved.');
 
     expect(publishDocument).toHaveBeenLastCalledWith('# Separate', undefined, { expiresAt: null });
+  });
+
+  it('keeps an unsaved new-document draft after a different edit link is opened', async () => {
+    const first = render(<App />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Unsaved new draft' } });
+    expect(window.localStorage.getItem('markshare-editor-recovery-v1')).toContain('# Unsaved new draft');
+    first.unmount();
+
+    documents.set('other-document', { id: 'other-document', editId: 'other-edit-capability', title: 'Other notes', markdown: '# Other notes' });
+    window.history.replaceState({}, '', '/e/other-edit-capability');
+    const second = render(<App />);
+    expect(await screen.findByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Other notes');
+    expect(window.localStorage.getItem('markshare-editor-recovery-v1')).toContain('# Unsaved new draft');
+    second.unmount();
+
+    window.history.replaceState({}, '', '/new');
+    render(<App />);
+    expect(await screen.findByText('Recovered unsaved local draft.')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Unsaved new draft');
+  });
+
+  it('does not rewrite remembered edit access while typing', async () => {
+    const setItem = vi.spyOn(window.localStorage, 'setItem');
+    render(<App />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Access' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+    setItem.mockClear();
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Access\n\nMore words' } });
+    expect(setItem.mock.calls.filter(([key]) => key === 'markshare-edit-access-v1')).toEqual([]);
   });
 
   it('clamps, resets, and cleans up the accessible splitter interaction', () => {

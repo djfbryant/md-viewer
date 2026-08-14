@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import type { DocumentLifecycle, EditCapability, SaveDocumentOutcome } from './document-lifecycle';
+import type { DocumentLifecycle, EditCapability, EditableDocument, SaveDocumentOutcome } from './document-lifecycle';
 
 const RECOVERY_KEY = 'markshare-editor-recovery-v1';
+const ACCESS_KEY = 'markshare-edit-access-v1';
 const DEFAULT_SPLIT = 50;
 const MIN_SPLIT = 22;
 const MAX_SPLIT = 78;
@@ -13,14 +14,18 @@ type Recovery = {
   publishedEditId: string | null;
 };
 
-function readRecovery(): Recovery {
+const emptyRecovery: Recovery = { markdown: '', publishedMarkdown: '', publishedId: null, publishedEditId: null };
+
+function recoveryStorageKey(editId: string | null) {
+  return editId ? `${RECOVERY_KEY}:${editId}` : RECOVERY_KEY;
+}
+
+function readRecovery(editId: string | null = null): Recovery {
   try {
-    const raw = window.localStorage.getItem(RECOVERY_KEY);
-    if (!raw) return { markdown: '', publishedMarkdown: '', publishedId: null, publishedEditId: null };
+    const raw = window.localStorage.getItem(recoveryStorageKey(editId));
+    if (!raw) return emptyRecovery;
     const parsed = JSON.parse(raw) as Partial<Recovery>;
-    if (typeof parsed.markdown !== 'string' || typeof parsed.publishedMarkdown !== 'string') {
-      return { markdown: '', publishedMarkdown: '', publishedId: null, publishedEditId: null };
-    }
+    if (typeof parsed.markdown !== 'string' || typeof parsed.publishedMarkdown !== 'string') return emptyRecovery;
     return {
       markdown: parsed.markdown,
       publishedMarkdown: parsed.publishedMarkdown,
@@ -28,35 +33,83 @@ function readRecovery(): Recovery {
       publishedEditId: typeof parsed.publishedEditId === 'string' ? parsed.publishedEditId : null,
     };
   } catch {
-    return { markdown: '', publishedMarkdown: '', publishedId: null, publishedEditId: null };
+    return emptyRecovery;
   }
 }
 
-function persistRecovery(recovery: Recovery) {
+function persistRecovery(editId: string | null, recovery: Recovery) {
   try {
+    const key = recoveryStorageKey(editId);
     if (recovery.markdown === recovery.publishedMarkdown) {
-      window.localStorage.removeItem(RECOVERY_KEY);
+      window.localStorage.removeItem(key);
       return;
     }
-    window.localStorage.setItem(RECOVERY_KEY, JSON.stringify(recovery));
+    window.localStorage.setItem(key, JSON.stringify(recovery));
+    if (key !== RECOVERY_KEY) window.localStorage.removeItem(RECOVERY_KEY);
   } catch {
     // Local recovery is a convenience. A blocked storage area must not prevent editing.
   }
 }
 
-export function useEditorSession(lifecycle: Pick<DocumentLifecycle, 'save' | 'delete'>) {
-  const [recovery] = useState(readRecovery);
-  const [markdown, setMarkdown] = useState(recovery.markdown);
-  const [publishedMarkdown, setPublishedMarkdown] = useState(recovery.publishedMarkdown);
-  const [publishedId, setPublishedId] = useState(recovery.publishedId);
-  const [publishedEditId, setPublishedEditId] = useState(recovery.publishedEditId);
-  const [expiresAt, setExpiresAt] = useState<Date | null>(null);
+function readAccess(): Record<string, string> {
+  try {
+    const raw = window.localStorage.getItem(ACCESS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function writeAccess(access: Record<string, string>) {
+  try {
+    window.localStorage.setItem(ACCESS_KEY, JSON.stringify(access));
+  } catch {
+    // Remembered edit access is a convenience, not a requirement to edit from an Edit Link.
+  }
+}
+
+export function rememberEditAccess(id: string, editId: string) {
+  const access = readAccess();
+  if (access[id] === editId) return;
+  writeAccess({ ...access, [id]: editId });
+}
+
+export function recallEditAccess(id: string) {
+  return readAccess()[id] ?? null;
+}
+
+export function forgetEditAccess(id: string) {
+  const next = readAccess();
+  delete next[id];
+  writeAccess(next);
+}
+
+export function useEditorSession(
+  lifecycle: Pick<DocumentLifecycle, 'save' | 'delete' | 'rotate'>,
+  existing?: EditableDocument,
+  routeEditId?: string,
+) {
+  const [recovery] = useState(() => readRecovery(existing?.editId ?? routeEditId ?? null));
+  const initialMarkdown = recovery.markdown && (!existing || recovery.publishedId === existing.id || recovery.publishedEditId === existing.editId)
+    ? recovery.markdown
+    : (existing?.markdown ?? recovery.markdown);
+  const [markdown, setMarkdown] = useState(initialMarkdown);
+  const [publishedMarkdown, setPublishedMarkdown] = useState(existing?.markdown ?? recovery.publishedMarkdown);
+  const [publishedId, setPublishedId] = useState(existing?.id ?? recovery.publishedId);
+  const [publishedEditId, setPublishedEditId] = useState(existing?.editId ?? recovery.publishedEditId);
+  const [expiresAt, setExpiresAt] = useState<Date | null>(existing?.expiresAt ?? null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [recoveredDraft, setRecoveredDraft] = useState(Boolean(recovery.markdown && recovery.markdown !== recovery.publishedMarkdown));
+  const [rotateError, setRotateError] = useState<string | null>(null);
+  const [recoveredDraft, setRecoveredDraft] = useState(Boolean(initialMarkdown && initialMarkdown !== (existing?.markdown ?? recovery.publishedMarkdown)));
   const [savedNotice, setSavedNotice] = useState(false);
+  const activeEditId = useRef<string | null>(existing?.editId ?? recovery.publishedEditId);
 
   const hasUnsavedChanges = markdown !== publishedMarkdown;
   const capability: EditCapability | undefined = publishedId && publishedEditId
@@ -64,8 +117,26 @@ export function useEditorSession(lifecycle: Pick<DocumentLifecycle, 'save' | 'de
     : undefined;
 
   useEffect(() => {
-    persistRecovery({ markdown, publishedMarkdown, publishedId, publishedEditId });
-  }, [markdown, publishedEditId, publishedId, publishedMarkdown]);
+    if (!existing) return;
+    if (activeEditId.current === existing.editId) {
+      rememberEditAccess(existing.id, existing.editId);
+      return;
+    }
+    const draft = readRecovery(existing.editId);
+    const nextMarkdown = draft.markdown && draft.publishedId === existing.id ? draft.markdown : existing.markdown;
+    activeEditId.current = existing.editId;
+    setPublishedId(existing.id);
+    setPublishedEditId(existing.editId);
+    setPublishedMarkdown(existing.markdown);
+    setMarkdown(nextMarkdown);
+    setExpiresAt(existing.expiresAt ?? null);
+    setRecoveredDraft(nextMarkdown !== existing.markdown);
+    rememberEditAccess(existing.id, existing.editId);
+  }, [existing?.editId, existing?.expiresAt, existing?.id, existing?.markdown]);
+
+  useEffect(() => {
+    persistRecovery(publishedEditId ?? routeEditId ?? null, { markdown, publishedMarkdown, publishedId, publishedEditId });
+  }, [markdown, publishedEditId, publishedId, publishedMarkdown, routeEditId]);
 
   useEffect(() => {
     if (!savedNotice) return;
@@ -86,12 +157,15 @@ export function useEditorSession(lifecycle: Pick<DocumentLifecycle, 'save' | 'de
     try {
       const outcome = await lifecycle.save(markdown, capability, { expiresAt: nextExpiry });
       if (outcome.kind === 'published') {
+        activeEditId.current = outcome.document.editId;
         setPublishedMarkdown(outcome.document.markdown);
         setPublishedId(outcome.document.id);
         setPublishedEditId(outcome.document.editId);
         setExpiresAt(outcome.document.expiresAt ?? nextExpiry);
         setRecoveredDraft(false);
         setSavedNotice(true);
+        rememberEditAccess(outcome.document.id, outcome.document.editId);
+        if (!capability) persistRecovery(null, emptyRecovery);
       } else if (outcome.kind === 'not-configured') {
         setSaveError('Saving needs an InstantDB app. Add VITE_INSTANT_APP_ID to save this document.');
       } else {
@@ -112,18 +186,41 @@ export function useEditorSession(lifecycle: Pick<DocumentLifecycle, 'save' | 'de
     try {
       const outcome = await lifecycle.delete(capability);
       if (outcome.kind === 'deleted') {
+        forgetEditAccess(capability.id);
+        persistRecovery(capability.editId, emptyRecovery);
+        persistRecovery(null, emptyRecovery);
+        activeEditId.current = null;
         setMarkdown('');
         setPublishedMarkdown('');
         setPublishedId(null);
         setPublishedEditId(null);
         setExpiresAt(null);
-        persistRecovery({ markdown: '', publishedMarkdown: '', publishedId: null, publishedEditId: null });
       } else {
         setDeleteError('We could not delete this document. Please try again.');
       }
       return outcome;
     } catch {
       setDeleteError('We could not delete this document. Please try again.');
+      return { kind: 'failed' as const };
+    }
+  }, [capability, lifecycle]);
+
+  const rotateEditLink = useCallback(async () => {
+    if (!capability) return { kind: 'failed' as const };
+    setRotateError(null);
+    try {
+      const outcome = await lifecycle.rotate(capability);
+      if (outcome.kind === 'rotated') {
+        persistRecovery(capability.editId, emptyRecovery);
+        activeEditId.current = outcome.document.editId;
+        setPublishedEditId(outcome.document.editId);
+        rememberEditAccess(outcome.document.id, outcome.document.editId);
+      } else {
+        setRotateError('We could not replace this edit link. Please try again.');
+      }
+      return outcome;
+    } catch {
+      setRotateError('We could not replace this edit link. Please try again.');
       return { kind: 'failed' as const };
     }
   }, [capability, lifecycle]);
@@ -144,20 +241,24 @@ export function useEditorSession(lifecycle: Pick<DocumentLifecycle, 'save' | 'de
     markdown,
     setMarkdown,
     publishedId,
+    publishedEditId,
     expiresAt,
     hasUnsavedChanges,
     isSaving,
     saveError,
     importError,
     deleteError,
+    rotateError,
     recoveredDraft,
     savedNotice,
     dismissRecoveredDraft: () => setRecoveredDraft(false),
     dismissSaveError: () => setSaveError(null),
     dismissImportError: () => setImportError(null),
     dismissDeleteError: () => setDeleteError(null),
+    dismissRotateError: () => setRotateError(null),
     save,
     deleteDocument,
+    rotateEditLink,
     importMarkdown,
   };
 }

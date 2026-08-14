@@ -34,11 +34,21 @@ function memoryStore(): DocumentPersistence & DocumentRemovalStore & {
       const document = documents.get(id);
       return document ? { kind: 'available', document } : { kind: 'unavailable' };
     },
+    useEditDocument(editId) {
+      const document = [...documents.values()].find((candidate) => candidate.editId === editId);
+      return document ? { kind: 'available', document } : { kind: 'unavailable' };
+    },
     async markDeleted(id, editId, deletedAt) {
       const document = documents.get(id);
       if (!document || document.editId !== editId) throw new Error('not allowed');
       documents.set(id, { ...document, deletedAt });
       return 'deleted';
+    },
+    async rotateEditId(id, editId, nextEditId) {
+      const document = documents.get(id);
+      if (!document || document.editId !== editId) throw new Error('not allowed');
+      documents.set(id, { ...document, editId: nextEditId });
+      return 'rotated';
     },
     async listDocuments(): Promise<RemovableDocument[]> {
       return [...documents.values()].map((document) => ({
@@ -84,7 +94,9 @@ describe('Document lifecycle', () => {
     const persistence: DocumentPersistence = {
       save: vi.fn().mockRejectedValue(new Error('network error')),
       useShareDocument: () => unavailable,
+      useEditDocument: () => unavailable,
       markDeleted: vi.fn(),
+      rotateEditId: vi.fn(),
     };
     const lifecycle = createDocumentLifecycle(persistence, () => 'opaque-document-id');
 
@@ -95,7 +107,9 @@ describe('Document lifecycle', () => {
     const lifecycle = createDocumentLifecycle({
       save: async () => 'not-configured',
       useShareDocument: () => unavailable,
+      useEditDocument: () => unavailable,
       markDeleted: async () => 'not-configured',
+      rotateEditId: async () => 'not-configured',
     }, () => 'opaque-document-id');
 
     await expect(lifecycle.save('Text')).resolves.toEqual({ kind: 'not-configured' });
@@ -234,5 +248,61 @@ describe('Document lifecycle', () => {
     expect(lifecycle.useShareDocument(published.document.id)).toEqual(unavailable);
     expect(store.documents.has(published.document.id)).toBe(false);
     expect(store.images.has(published.document.id)).toBe(false);
+  });
+
+  it('lets an edit capability open the saved document without exposing that capability on the share outcome', async () => {
+    const ids = ['opaque-document-id', 'private-edit-capability'];
+    const lifecycle = createDocumentLifecycle(memoryStore(), () => ids.shift()!);
+    await lifecycle.save('# Release notes\n\nHello **reader**.');
+
+    expect(lifecycle.useEditDocument('private-edit-capability')).toEqual({
+      kind: 'available',
+      document: {
+        id: 'opaque-document-id',
+        editId: 'private-edit-capability',
+        title: 'Release notes',
+        markdown: '# Release notes\n\nHello **reader**.',
+      },
+    });
+    expect(lifecycle.useShareDocument('opaque-document-id')).toEqual({
+      kind: 'available',
+      document: { id: 'opaque-document-id', title: 'Release notes', markdown: '# Release notes\n\nHello **reader**.' },
+    });
+    expect(lifecycle.useEditDocument('wrong-edit-capability')).toEqual(unavailable);
+    expect(lifecycle.useEditDocument('')).toEqual(unavailable);
+  });
+
+  it('replaces a leaked edit capability while the share link continues to serve the saved document', async () => {
+    const ids = ['opaque-document-id', 'private-edit-capability', 'replacement-edit-capability'];
+    const lifecycle = createDocumentLifecycle(memoryStore(), () => ids.shift()!);
+    const published = await lifecycle.save('# Release notes');
+    if (published.kind !== 'published') throw new Error('Expected save to succeed');
+
+    await expect(lifecycle.rotate(published.document)).resolves.toEqual({
+      kind: 'rotated',
+      document: { id: 'opaque-document-id', editId: 'replacement-edit-capability' },
+    });
+
+    expect(lifecycle.useEditDocument('private-edit-capability')).toEqual(unavailable);
+    expect(lifecycle.useEditDocument('replacement-edit-capability')).toMatchObject({
+      kind: 'available',
+      document: { id: 'opaque-document-id', editId: 'replacement-edit-capability', markdown: '# Release notes' },
+    });
+    expect(lifecycle.useShareDocument('opaque-document-id')).toMatchObject({
+      kind: 'available',
+      document: { id: 'opaque-document-id', markdown: '# Release notes' },
+    });
+  });
+
+  it('returns the same unavailable outcome for a deleted document opened through its edit capability', async () => {
+    const ids = ['opaque-document-id', 'private-edit-capability'];
+    const lifecycle = createDocumentLifecycle(memoryStore(), () => ids.shift()!);
+    const published = await lifecycle.save('# Secret notes');
+    if (published.kind !== 'published') throw new Error('Expected save to succeed');
+
+    await lifecycle.delete(published.document);
+
+    expect(lifecycle.useEditDocument(published.document.editId)).toEqual(unavailable);
+    expect(lifecycle.useShareDocument(published.document.id)).toEqual(unavailable);
   });
 });

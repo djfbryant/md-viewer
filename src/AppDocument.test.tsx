@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const documents = vi.hoisted(() => {
-  const documents: Array<{ id: string; title: string; markdown: string; expiresAt?: Date; deleted?: boolean }> = [];
+  const documents: Array<{ id: string; editId: string; title: string; markdown: string; expiresAt?: Date; deleted?: boolean }> = [];
   return documents;
 });
 
@@ -16,7 +16,7 @@ vi.mock('./lib/instant-document-persistence', () => ({
     save: vi.fn(async (markdown: string, _existing?: { id: string; editId: string }, options?: { expiresAt?: Date | null }) => {
       const document = {
         id: 'opaque-document-id',
-        editId: 'private-edit-capability',
+        editId: documents.find((candidate) => candidate.id === 'opaque-document-id')?.editId ?? 'private-edit-capability',
         title: markdown.startsWith('# ') ? markdown.split('\n')[0].slice(2) : 'Untitled document',
         markdown,
         ...(options?.expiresAt ? { expiresAt: options.expiresAt } : {}),
@@ -31,8 +31,21 @@ vi.mock('./lib/instant-document-persistence', () => ({
       if (document) document.deleted = true;
       return { kind: 'deleted' };
     }),
+    rotate: vi.fn(async (existing: { id: string; editId: string }) => {
+      const document = documents.find((candidate) => candidate.id === existing.id && candidate.editId === existing.editId);
+      if (!document) return { kind: 'failed' };
+      document.editId = 'replacement-edit-capability';
+      return { kind: 'rotated', document: { id: document.id, editId: document.editId } };
+    }),
     useShareDocument: (id: string) => {
       const document = documents.find((candidate) => candidate.id === id && !candidate.deleted);
+      if (!document) return { kind: 'unavailable' };
+      if (document.expiresAt && document.expiresAt.getTime() <= Date.now()) return { kind: 'unavailable' };
+      return { kind: 'available', document: { id: document.id, title: document.title, markdown: document.markdown, expiresAt: document.expiresAt } };
+    },
+    useEditDocument: (editId: string) => {
+      if (!editId) return { kind: 'unavailable' };
+      const document = documents.find((candidate) => candidate.editId === editId && !candidate.deleted);
       if (!document) return { kind: 'unavailable' };
       if (document.expiresAt && document.expiresAt.getTime() <= Date.now()) return { kind: 'unavailable' };
       return { kind: 'available', document };
@@ -148,7 +161,7 @@ describe('basic anonymous documents', () => {
 
     expect(screen.getByText('Never expires')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
-    fireEvent.change(screen.getByLabelText('Expiry date and time'), { target: { value: '2026-08-14T18:00' } });
+    fireEvent.change(screen.getByLabelText('Expiry date and time'), { target: { value: '2099-01-01T12:00' } });
     expect(await screen.findAllByText(/Expires /)).not.toHaveLength(0);
 
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
@@ -193,5 +206,91 @@ describe('basic anonymous documents', () => {
     expect(await screen.findByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();
     expect(screen.getByText('This share link is invalid or the document is no longer available.')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Secret notes' })).not.toBeInTheDocument();
+  });
+
+  it('opens a private edit link in the editor and keeps the share link read-only', async () => {
+    const markdown = '# Private notes\n\nOnly the author can change this.';
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: markdown } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+    expect(window.location.pathname).toBe('/e/private-edit-capability');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    expect(screen.getByText(/http:\/\/localhost\/e\/private-edit-capability/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+    fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
+    expect(await screen.findByText('Read only')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: /markdown document/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(await screen.findByRole('textbox', { name: /markdown document/i })).toHaveValue(markdown);
+    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Private revision' } });
+    expect(screen.getByText('not yet published')).toBeInTheDocument();
+
+    window.history.pushState({}, '', '/s/opaque-document-id');
+    fireEvent.popState(window);
+    expect(await screen.findByRole('heading', { name: 'Private notes' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Private revision' })).not.toBeInTheDocument();
+  });
+
+  it('restores edit access from the edit link and forgets a replaced link', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Kept notes' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+
+    const first = screen.getByRole('textbox', { name: /markdown document/i });
+    expect(first).toHaveValue('# Kept notes');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Replace edit link' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Replace edit link' }));
+    expect(await screen.findByText(/http:\/\/localhost\/e\/replacement-edit-capability/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+    window.history.replaceState({}, '', '/e/private-edit-capability');
+    fireEvent.popState(window);
+    expect(await screen.findByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: /markdown document/i })).not.toBeInTheDocument();
+
+    window.history.replaceState({}, '', '/e/replacement-edit-capability');
+    fireEvent.popState(window);
+    expect(await screen.findByRole('textbox', { name: /markdown document/i })).toHaveValue('# Kept notes');
+  });
+
+  it('does not keep the previous document visible when opening a different edit link', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Kept notes' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+
+    documents.push({ id: 'other-document-id', editId: 'other-edit-capability', title: 'Other notes', markdown: '# Other notes' });
+    window.history.replaceState({}, '', '/e/other-edit-capability');
+    fireEvent.popState(window);
+
+    expect(screen.queryByDisplayValue('# Kept notes')).not.toBeInTheDocument();
+    expect(await screen.findByRole('textbox', { name: /markdown document/i })).toHaveValue('# Other notes');
+  });
+
+  it('does not disclose an edit control on a share link in a browser that never saved the document', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Shared notes' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+
+    window.localStorage.removeItem('markshare-edit-access-v1');
+    window.history.replaceState({}, '', '/s/opaque-document-id');
+    fireEvent.popState(window);
+
+    expect(await screen.findByText('Read only')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/\/e\//)).not.toBeInTheDocument();
   });
 });

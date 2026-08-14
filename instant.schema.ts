@@ -6,7 +6,7 @@ const schema = i.graph({
   documents: i.entity({
     title: i.string(),
     markdown: i.string(),
-    editId: i.string(),
+    editId: i.string().unique().indexed(),
     createdAt: i.date(),
     updatedAt: i.date(),
     expiresAt: i.date().optional(),
