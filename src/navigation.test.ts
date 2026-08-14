@@ -16,6 +16,14 @@ describe('document routes', () => {
     expect(recognizeRoute('/new/')).toEqual({ kind: 'unavailable' });
   });
 
+  it('recognises About, Privacy, and Acceptable use as public information paths', () => {
+    expect(recognizeRoute('/about')).toEqual({ kind: 'info', page: 'about' });
+    expect(recognizeRoute('/privacy')).toEqual({ kind: 'info', page: 'privacy' });
+    expect(recognizeRoute('/acceptable-use')).toEqual({ kind: 'info', page: 'acceptable-use' });
+    expect(recognizeRoute('/about/')).toEqual({ kind: 'info', page: 'about' });
+    expect(recognizeRoute('/privacy/more')).toEqual({ kind: 'unavailable' });
+  });
+
   it('treats malformed percent encoding and unknown paths as unavailable', () => {
     expect(recognizeRoute('/s/%')).toEqual({ kind: 'unavailable' });
     expect(recognizeRoute('/e/%')).toEqual({ kind: 'unavailable' });

@@ -28,7 +28,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .import-button input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .import-button:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.home-shell, .editor-shell, .reader-shell { display: flex; flex-direction: column; height: 100%; min-height: 100dvh; max-height: 100dvh; }
+.home-shell, .editor-shell, .reader-shell, .info-shell { display: flex; flex-direction: column; height: 100%; min-height: 100dvh; max-height: 100dvh; }
 .home-content { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(300px, .7fr); align-items: center; gap: clamp(var(--space-8), 7vw, 120px); width: min(1120px, 100%); flex: 1; min-height: 0; margin: 0 auto; padding: var(--space-10) var(--space-8); }
 .home-copy { max-width: 620px; }
 .eyebrow, .label { margin: 0; color: var(--ink-faint); font-size: var(--type-label-size); font-weight: var(--weight-bold); letter-spacing: var(--tracking-label); text-transform: uppercase; }
@@ -42,7 +42,21 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 .card-step > span { padding-top: 2px; color: var(--accent-ink); font-family: var(--mono); font-size: var(--type-label-size); }
 .card-step strong { font-size: 14px; font-weight: var(--weight-semibold); }
 .card-step p { margin: 3px 0 0; color: var(--ink-soft); font-size: 13px; }
-.home-footer { height: 32px; flex: none; padding: 7px 16px; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: var(--type-small-size); }
+.home-footer { display: flex; align-items: center; gap: 14px; height: 32px; flex: none; padding: 7px 16px; border-top: 1px solid var(--line); background: var(--surface); color: var(--ink-faint); font-size: var(--type-small-size); }
+.home-tagline { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.site-links { display: flex; align-items: center; gap: 14px; }
+.home-footer .site-links { margin-left: auto; }
+.site-links a { color: var(--ink-soft); text-decoration: none; font-size: var(--type-button-size); font-weight: var(--weight-medium); }
+.site-links a:hover, .site-links a[aria-current='page'] { color: var(--ink); }
+.site-links a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.info-content { flex: 1; overflow: auto; padding: 56px 24px 80px; background: var(--surface); }
+.info-article { max-width: 62ch; margin: 0 auto; }
+.info-article h1 { margin: var(--space-4) 0 18px; font-size: clamp(2rem, 5vw, 3.2rem); font-weight: var(--weight-bold); line-height: 1.05; letter-spacing: -.04em; }
+.info-lead { margin: 0 0 2em; color: var(--ink-soft); font-size: 1.05rem; }
+.info-article h2 { margin: 1.9em 0 .55em; font-size: 1.08em; font-weight: var(--weight-semibold); letter-spacing: -.014em; }
+.info-article p { margin: 0 0 1.05em; color: var(--ink-soft); }
+.info-article h2 + p { color: var(--ink); }
+.info-updated { margin-top: 2.5em; color: var(--ink-faint); font-size: var(--type-small-size); }
 
 .document-title { display: flex; align-items: center; gap: var(--space-3); min-width: 0; margin-left: 2px; padding-left: 14px; border-left: 1px solid var(--line); }
 .document-title > span:first-child { overflow: hidden; font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
@@ -155,4 +169,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
   .home-content { display: block; overflow: auto; padding: 42px 22px; }
   .home-copy h1 { font-size: clamp(2.5rem, 15vw, 4.2rem); }
   .home-card { margin-top: 36px; }
+  .home-tagline { display: none; }
+  .home-bar .site-links { display: none; }
+  .info-content { padding: 36px 22px 64px; }
 }
