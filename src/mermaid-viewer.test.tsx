@@ -121,10 +121,12 @@ describe('MermaidViewer', () => {
 
     render(<ViewerHarness />);
     await waitFor(() => expect(observers).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(screen.getByLabelText('Zoom 54%')).toBeInTheDocument();
 
     act(() => observers[0]?.callback([], observers[0] as unknown as ResizeObserver));
 
-    await waitFor(() => expect(screen.getByLabelText('Zoom 45%')).toBeInTheDocument());
+    expect(screen.getByLabelText('Zoom 45%')).toBeInTheDocument();
     expect(observers).toHaveLength(1);
   });
 
