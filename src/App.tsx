@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatExpiry, toDatetimeLocalValue } from './document';
 import { type SharedDocument } from './document-lifecycle';
+import { MAX_IMAGES_PER_DOCUMENT } from './document-image';
 import { MAX_SPLIT, MIN_SPLIT, recallEditAccess, useEditorSession, useEditorSplit } from './editor-session';
 import { documentLifecycle } from './lib/instant-document-persistence';
 import { downloadMarkdown, interpretMarkdown, MarkdownView, type InterpretedMarkdown, type MermaidExpandRequest } from './markdown';
@@ -22,12 +23,13 @@ function Brand({ showName = true }: { showName?: boolean }) {
 }
 
 /** Keeps Preview and Share Link on the same Mermaid presentation and viewer path. */
-function RenderedDocument({ document }: { document: InterpretedMarkdown }) {
+function RenderedDocument({ document, imageSources }: { document: InterpretedMarkdown; imageSources?: Record<string, string> }) {
   const [expandedMermaid, setExpandedMermaid] = useState<MermaidExpandRequest | null>(null);
 
   return <>
     <MarkdownView
       document={document}
+      imageSources={imageSources}
       openMermaidId={expandedMermaid?.id}
       onMermaidExpand={setExpandedMermaid}
     />
@@ -89,8 +91,12 @@ function Editor({
   const existing = editId && remote.kind === 'available' ? remote.document : undefined;
   const session = useEditorSession(documentLifecycle, existing, editId);
   const split = useEditorSplit();
-  const { markdown, isSaving, save } = session;
+  const { markdown, isSaving, save, imageCount, imageSources, attachFiles } = session;
   const interpreted = useMemo(() => interpretMarkdown(markdown), [markdown]);
+
+  const insertFiles = useCallback((files: File[], target: HTMLTextAreaElement) => {
+    attachFiles(files, { start: target.selectionStart, end: target.selectionEnd });
+  }, [attachFiles]);
 
   const publish = useCallback(async (options?: { expiresAt?: Date | null }) => {
     const outcome = await save(options);
@@ -143,22 +149,45 @@ function Editor({
       <div className="panes" ref={split.panesRef} style={{ '--split': `${split.split}%` } as React.CSSProperties}>
         <section className="pane pane-write" aria-label="Markdown editor">
           <div className="pane-head"><span className="label">Write</span></div>
-          <textarea aria-label="Markdown document" placeholder="# Start writing" spellCheck={false} value={markdown} onChange={(event) => session.setMarkdown(event.target.value)} />
+          <textarea
+            aria-label="Markdown document"
+            placeholder="# Start writing"
+            spellCheck={false}
+            value={markdown}
+            onChange={(event) => session.setMarkdown(event.target.value)}
+            onPaste={(event) => {
+              const files = [...(event.clipboardData?.files ?? [])];
+              if (!files.some((file) => file.type.startsWith('image/'))) return;
+              event.preventDefault();
+              insertFiles(files, event.currentTarget);
+            }}
+            onDragOver={(event) => {
+              if ([...event.dataTransfer.types].includes('Files')) event.preventDefault();
+            }}
+            onDrop={(event) => {
+              const files = [...event.dataTransfer.files];
+              if (!files.some((file) => file.type.startsWith('image/'))) return;
+              event.preventDefault();
+              insertFiles(files, event.currentTarget);
+            }}
+          />
         </section>
         <button className="splitter" onPointerDown={split.startDrag} onPointerMove={split.moveDrag} onPointerUp={split.finishDrag} onPointerCancel={split.finishDrag} onLostPointerCapture={split.finishDrag} onDoubleClick={split.resetSplit} onKeyDown={split.resizeByKeyboard} role="separator" aria-orientation="vertical" aria-label="Resize the write and preview panes" aria-valuenow={Math.round(split.split)} aria-valuemin={MIN_SPLIT} aria-valuemax={MAX_SPLIT} title="Drag to resize · double-click to reset" />
         <section className="pane pane-preview" aria-label="Document preview">
           <div className="pane-head"><span className="label">Preview</span><span className="preview-note">{session.hasUnsavedChanges ? 'not yet published' : 'matches share link'}</span></div>
-          <div className="preview"><article className={markdown ? 'markdown' : 'preview-placeholder'}>{markdown ? <RenderedDocument document={interpreted} /> : <><h1>Your preview will appear here</h1><p>Write Markdown, then save a read-only share link.</p></>}</article></div>
+          <div className="preview"><article className={markdown ? 'markdown' : 'preview-placeholder'}>{markdown ? <RenderedDocument document={interpreted} imageSources={imageSources} /> : <><h1>Your preview will appear here</h1><p>Write Markdown, then save a read-only share link.</p></>}</article></div>
         </section>
       </div>
       <footer className="status-footer">
         <span>{markdown.trim() ? `${markdown.trim().split(/\s+/).length} words` : 'Draft document'}</span>
+        <span>{imageCount}/{MAX_IMAGES_PER_DOCUMENT} images</span>
         <span>{formatExpiry(session.expiresAt)}</span>
         <span className="status-url">{session.publishedId ? shareUrl(session.publishedId) : 'Save to create a share link'}</span>
       </footer>
       {session.recoveredDraft && <div className="toast" role="status">Recovered unsaved local draft.<button className="toast-dismiss" onClick={session.dismissRecoveredDraft} aria-label="Dismiss recovery message">×</button></div>}
       {session.saveError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="save-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissSaveError(); }}><h2 id="save-error-title">Document not saved</h2><p>{session.saveError}</p><button autoFocus className="button button--primary" onClick={session.dismissSaveError}>Done</button></section></div>}
       {session.importError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="import-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissImportError(); }}><h2 id="import-error-title">Markdown not imported</h2><p>{session.importError}</p><button autoFocus className="button button--primary" onClick={session.dismissImportError}>Done</button></section></div>}
+      {session.imageError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="image-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissImageError(); }}><h2 id="image-error-title">Image not added</h2><p>{session.imageError}</p><button autoFocus className="button button--primary" onClick={session.dismissImageError}>Done</button></section></div>}
       {session.deleteError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="delete-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissDeleteError(); }}><h2 id="delete-error-title">Document not deleted</h2><p>{session.deleteError}</p><button autoFocus className="button button--primary" onClick={session.dismissDeleteError}>Done</button></section></div>}
       {session.rotateError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="rotate-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissRotateError(); }}><h2 id="rotate-error-title">Edit link not replaced</h2><p>{session.rotateError}</p><button autoFocus className="button button--primary" onClick={session.dismissRotateError}>Done</button></section></div>}
       {session.savedNotice && session.publishedId && <div className="toast" role="status">Changes saved. <button className="toast-link" onClick={() => onNavigate(sharePath(session.publishedId!))}>Open share link</button></div>}
@@ -235,7 +264,7 @@ function Reader({ document, onEdit }: { document: SharedDocument; onEdit?: () =>
       <button className="button" onClick={() => downloadMarkdown(interpreted)}>Download .md</button>
     </>}
     title={interpreted.title}
-  ><div className="reader-content"><article className="markdown"><RenderedDocument document={interpreted} /></article></div></ReaderLayout>;
+  ><div className="reader-content"><article className="markdown"><RenderedDocument document={interpreted} imageSources={document.imageSources} /></article></div></ReaderLayout>;
 }
 
 function MissingDocument() {

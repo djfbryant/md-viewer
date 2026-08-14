@@ -44,7 +44,7 @@ INSTANT_APP_ADMIN_TOKEN=your-instant-admin-token
 CRON_SECRET=a-long-random-string
 ```
 
-`INSTANT_APP_ID` may be set as well; otherwise the cleanup job uses `VITE_INSTANT_APP_ID`. After changing the Instant schema or permission rules (expiry, Edit Links, and similar), push both:
+`INSTANT_APP_ID` may be set as well; otherwise the cleanup job uses `VITE_INSTANT_APP_ID`. After changing the Instant schema or permission rules (expiry, Edit Links, pasted images, and similar), push both:
 
 ```sh
 npx instant-cli push schema --yes

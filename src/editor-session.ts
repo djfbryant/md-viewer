@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { DocumentLifecycle, EditCapability, EditableDocument, SaveDocumentOutcome } from './document-lifecycle';
+import { MAX_IMAGES_PER_DOCUMENT } from './document-image';
 
 const RECOVERY_KEY = 'markshare-editor-recovery-v1';
 const ACCESS_KEY = 'markshare-edit-access-v1';
@@ -88,8 +89,21 @@ export function forgetEditAccess(id: string) {
   writeAccess(next);
 }
 
+function insertSnippet(markdown: string, snippet: string, start: number, end: number) {
+  const padBefore = start > 0 && markdown[start - 1] !== '\n' ? '\n\n' : '';
+  const padAfter = end < markdown.length && markdown[end] !== '\n' ? '\n\n' : '\n';
+  return markdown.slice(0, start) + padBefore + snippet + padAfter + markdown.slice(end);
+}
+
+type PendingImage = {
+  file: File;
+  id: string;
+  previewUrl: string;
+  uploaded: boolean;
+};
+
 export function useEditorSession(
-  lifecycle: Pick<DocumentLifecycle, 'save' | 'delete' | 'rotate'>,
+  lifecycle: Pick<DocumentLifecycle, 'attachImage' | 'save' | 'delete' | 'rotate'>,
   existing?: EditableDocument,
   routeEditId?: string,
 ) {
@@ -102,19 +116,36 @@ export function useEditorSession(
   const [publishedId, setPublishedId] = useState(existing?.id ?? recovery.publishedId);
   const [publishedEditId, setPublishedEditId] = useState(existing?.editId ?? recovery.publishedEditId);
   const [expiresAt, setExpiresAt] = useState<Date | null>(existing?.expiresAt ?? null);
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [rotateError, setRotateError] = useState<string | null>(null);
   const [recoveredDraft, setRecoveredDraft] = useState(Boolean(initialMarkdown && initialMarkdown !== (existing?.markdown ?? recovery.publishedMarkdown)));
   const [savedNotice, setSavedNotice] = useState(false);
   const activeEditId = useRef<string | null>(existing?.editId ?? recovery.publishedEditId);
+  const pendingImagesRef = useRef<PendingImage[]>([]);
+
+  useEffect(() => {
+    pendingImagesRef.current = pendingImages;
+  }, [pendingImages]);
+
+  useEffect(() => () => {
+    pendingImagesRef.current.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+  }, []);
 
   const hasUnsavedChanges = markdown !== publishedMarkdown;
   const capability: EditCapability | undefined = publishedId && publishedEditId
     ? { id: publishedId, editId: publishedEditId }
     : undefined;
+  const publishedImageCount = Object.keys(existing?.imageSources ?? {}).length;
+  const imageCount = publishedImageCount + pendingImages.filter((image) => !existing?.imageSources?.[image.id]).length;
+  const imageSources = useMemo(() => ({
+    ...existing?.imageSources,
+    ...Object.fromEntries(pendingImages.map((image) => [image.id, image.previewUrl])),
+  }), [existing?.imageSources, pendingImages]);
 
   useEffect(() => {
     if (!existing) return;
@@ -130,6 +161,10 @@ export function useEditorSession(
     setPublishedMarkdown(existing.markdown);
     setMarkdown(nextMarkdown);
     setExpiresAt(existing.expiresAt ?? null);
+    setPendingImages((current) => {
+      current.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+      return [];
+    });
     setRecoveredDraft(nextMarkdown !== existing.markdown);
     rememberEditAccess(existing.id, existing.editId);
   }, [existing?.editId, existing?.expiresAt, existing?.id, existing?.markdown]);
@@ -137,6 +172,15 @@ export function useEditorSession(
   useEffect(() => {
     persistRecovery(publishedEditId ?? routeEditId ?? null, { markdown, publishedMarkdown, publishedId, publishedEditId });
   }, [markdown, publishedEditId, publishedId, publishedMarkdown, routeEditId]);
+
+  useEffect(() => {
+    const sources = existing?.imageSources;
+    if (!sources) return;
+    const dropping = pendingImagesRef.current.filter((image) => sources[image.id]);
+    if (!dropping.length) return;
+    dropping.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+    setPendingImages((current) => current.filter((image) => !sources[image.id]));
+  }, [existing?.imageSources]);
 
   useEffect(() => {
     if (!savedNotice) return;
@@ -155,7 +199,11 @@ export function useEditorSession(
     setSaveError(null);
     const nextExpiry = options && 'expiresAt' in options ? options.expiresAt ?? null : expiresAt;
     try {
-      const outcome = await lifecycle.save(markdown, capability, { expiresAt: nextExpiry });
+      const images = pendingImages.filter((image) => !image.uploaded).map((image) => ({ id: image.id, file: image.file }));
+      const outcome = await lifecycle.save(markdown, capability, {
+        expiresAt: nextExpiry,
+        ...(images.length ? { images } : {}),
+      });
       if (outcome.kind === 'published') {
         activeEditId.current = outcome.document.editId;
         setPublishedMarkdown(outcome.document.markdown);
@@ -165,6 +213,7 @@ export function useEditorSession(
         setRecoveredDraft(false);
         setSavedNotice(true);
         rememberEditAccess(outcome.document.id, outcome.document.editId);
+        setPendingImages((current) => current.map((image) => ({ ...image, uploaded: true })));
         if (!capability) persistRecovery(null, emptyRecovery);
       } else if (outcome.kind === 'not-configured') {
         setSaveError('Saving needs an InstantDB app. Add VITE_INSTANT_APP_ID to save this document.');
@@ -178,7 +227,7 @@ export function useEditorSession(
     } finally {
       setIsSaving(false);
     }
-  }, [capability, expiresAt, lifecycle, markdown]);
+  }, [capability, expiresAt, lifecycle, markdown, pendingImages]);
 
   const deleteDocument = useCallback(async () => {
     if (!capability) return { kind: 'failed' as const };
@@ -225,6 +274,38 @@ export function useEditorSession(
     }
   }, [capability, lifecycle]);
 
+  const attachFiles = useCallback((files: File[], insertAt?: { start: number; end: number }) => {
+    const images = files.filter((file) => file.type.startsWith('image/'));
+    if (!images.length) return;
+
+    let nextCount = imageCount;
+    const attached: PendingImage[] = [];
+    const snippets: string[] = [];
+    for (const file of images) {
+      const outcome = lifecycle.attachImage(file, nextCount);
+      if (outcome.kind !== 'attached') {
+        setImageError(
+          outcome.kind === 'too-large' ? 'Each image must be 5 MB or smaller.'
+            : outcome.kind === 'too-many' ? `A document can include up to ${MAX_IMAGES_PER_DOCUMENT} images.`
+              : 'MarkShare can paste PNG, JPEG, WebP, and GIF images.',
+        );
+        break;
+      }
+      nextCount += 1;
+      snippets.push(outcome.image.markdown);
+      attached.push({
+        id: outcome.image.id,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        uploaded: false,
+      });
+    }
+    if (!attached.length) return;
+    setPendingImages((current) => [...current, ...attached]);
+    const snippet = snippets.join('\n\n');
+    setMarkdown((current) => insertSnippet(current, snippet, insertAt?.start ?? current.length, insertAt?.end ?? insertAt?.start ?? current.length));
+  }, [imageCount, lifecycle]);
+
   const importMarkdown = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -243,10 +324,13 @@ export function useEditorSession(
     publishedId,
     publishedEditId,
     expiresAt,
+    imageCount,
+    imageSources,
     hasUnsavedChanges,
     isSaving,
     saveError,
     importError,
+    imageError,
     deleteError,
     rotateError,
     recoveredDraft,
@@ -254,11 +338,13 @@ export function useEditorSession(
     dismissRecoveredDraft: () => setRecoveredDraft(false),
     dismissSaveError: () => setSaveError(null),
     dismissImportError: () => setImportError(null),
+    dismissImageError: () => setImageError(null),
     dismissDeleteError: () => setDeleteError(null),
     dismissRotateError: () => setRotateError(null),
     save,
     deleteDocument,
     rotateEditLink,
+    attachFiles,
     importMarkdown,
   };
 }

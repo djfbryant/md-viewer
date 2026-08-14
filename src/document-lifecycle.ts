@@ -1,12 +1,16 @@
+import { attachDocumentImage, isSupportedImageType, MAX_IMAGE_BYTES, MAX_IMAGES_PER_DOCUMENT, type AttachImageOutcome, type ImageInput } from './document-image';
 import { interpretMarkdown } from './markdown';
 
 export type InstantDate = Date | number | string;
+
+export type DocumentImageSources = Record<string, string>;
 
 export type SharedDocument = {
   id: string;
   title: string;
   markdown: string;
   expiresAt?: Date;
+  imageSources?: DocumentImageSources;
 };
 
 export type EditableDocument = SharedDocument & {
@@ -15,8 +19,14 @@ export type EditableDocument = SharedDocument & {
 
 export type EditCapability = Pick<EditableDocument, 'id' | 'editId'>;
 
+export type PendingDocumentImage = {
+  id: string;
+  file: Blob;
+};
+
 export type SaveDocumentOptions = {
   expiresAt?: Date | null;
+  images?: PendingDocumentImage[];
 };
 
 export type ShareDocumentOutcome =
@@ -49,6 +59,11 @@ export type CleanupDocumentOutcome =
   | { kind: 'not-configured' }
   | { kind: 'failed' };
 
+export type PersistedImage = {
+  id: string;
+  url: string;
+};
+
 export type PersistedDocument = {
   id: string;
   title: string;
@@ -56,6 +71,7 @@ export type PersistedDocument = {
   editId?: string;
   expiresAt?: InstantDate | null;
   deletedAt?: InstantDate | null;
+  images?: PersistedImage[];
 };
 
 export type PersistedShareOutcome =
@@ -83,6 +99,9 @@ export type RemovableDocument = {
 
 export interface DocumentPersistence {
   save(document: StoredDocument): Promise<'published' | 'not-configured'>;
+  uploadImages(documentId: string, images: PendingDocumentImage[], editId: string): Promise<'uploaded' | 'not-configured'>;
+  removeImages(documentId: string, imageIds: string[], editId: string): Promise<void>;
+  listImageIds(documentId: string): Promise<string[]>;
   useShareDocument(id: string): PersistedShareOutcome;
   useEditDocument(editId: string): PersistedShareOutcome;
   markDeleted(id: string, editId: string, deletedAt: Date): Promise<'deleted' | 'not-configured'>;
@@ -95,6 +114,7 @@ export interface DocumentRemovalStore {
 }
 
 export interface DocumentLifecycle {
+  attachImage(file: ImageInput, currentImageCount: number): AttachImageOutcome;
   save(markdown: string, existing?: EditCapability, options?: SaveDocumentOptions): Promise<SaveDocumentOutcome>;
   useShareDocument(id: string): ShareDocumentOutcome;
   useEditDocument(editId: string): EditDocumentOutcome;
@@ -122,6 +142,9 @@ export function createDocumentLifecycle(
   removal?: DocumentRemovalStore,
 ): DocumentLifecycle {
   return {
+    attachImage(file, currentImageCount) {
+      return attachDocumentImage(file, currentImageCount, generateId);
+    },
     async save(markdown, existing, options) {
       const id = existing?.id ?? generateId();
       const timestamp = now();
@@ -137,9 +160,40 @@ export function createDocumentLifecycle(
         ...(expiresAt !== undefined ? { expiresAt } : {}),
       };
 
+      const uploadedIds: string[] = [];
+      const discardUploaded = async () => {
+        if (!uploadedIds.length) return;
+        try {
+          await persistence.removeImages(id, uploadedIds, document.editId);
+        } catch {
+          // Compensation is best-effort; document cleanup still removes leftovers.
+        }
+      };
+
       try {
+        if (options?.images?.length) {
+          if (options.images.some((image) => image.file.size > MAX_IMAGE_BYTES || !isSupportedImageType(image.file.type))) {
+            return { kind: 'failed' };
+          }
+          const storedIds = existing ? await persistence.listImageIds(existing.id) : [];
+          const stored = new Set(storedIds);
+          if (stored.size + options.images.filter((image) => !stored.has(image.id)).length > MAX_IMAGES_PER_DOCUMENT) {
+            return { kind: 'failed' };
+          }
+          for (const image of options.images) {
+            const uploaded = await persistence.uploadImages(id, [image], document.editId);
+            if (uploaded === 'not-configured') {
+              await discardUploaded();
+              return { kind: 'not-configured' };
+            }
+            uploadedIds.push(image.id);
+          }
+        }
         const result = await persistence.save(document);
-        if (result === 'not-configured') return { kind: 'not-configured' };
+        if (result === 'not-configured') {
+          await discardUploaded();
+          return { kind: 'not-configured' };
+        }
         return {
           kind: 'published',
           document: {
@@ -151,6 +205,7 @@ export function createDocumentLifecycle(
           },
         };
       } catch {
+        await discardUploaded();
         return { kind: 'failed' };
       }
     },
@@ -196,6 +251,9 @@ function toShareOutcome(outcome: PersistedShareOutcome, at: Date): ShareDocument
   if (outcome.kind !== 'available') return outcome;
   if (isDocumentUnavailable(outcome.document, at)) return { kind: 'unavailable' };
   const expiresAt = toDate(outcome.document.expiresAt);
+  const imageSources = Object.fromEntries(
+    (outcome.document.images ?? []).filter((image) => image.url).map((image) => [image.id, image.url]),
+  );
   return {
     kind: 'available',
     document: {
@@ -203,6 +261,7 @@ function toShareOutcome(outcome: PersistedShareOutcome, at: Date): ShareDocument
       title: outcome.document.title,
       markdown: outcome.document.markdown,
       ...(expiresAt ? { expiresAt } : {}),
+      ...(Object.keys(imageSources).length ? { imageSources } : {}),
     },
   };
 }

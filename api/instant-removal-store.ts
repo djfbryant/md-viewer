@@ -1,7 +1,6 @@
 import { init } from '@instantdb/admin';
+import { documentImagePrefix } from '../src/document-image';
 import type { DocumentRemovalStore, InstantDate, RemovableDocument } from '../src/document-lifecycle';
-
-const IMAGE_PATH_PREFIX = 'documents/';
 
 type InstantFile = { id: string; path?: string | null };
 type InstantDocument = {
@@ -11,7 +10,7 @@ type InstantDocument = {
 };
 
 function ownedImageIds(documentId: string, files: InstantFile[]) {
-  const prefix = `${IMAGE_PATH_PREFIX}${documentId}/`;
+  const prefix = documentImagePrefix(documentId);
   return files.filter((file) => file.path?.startsWith(prefix)).map((file) => file.id);
 }
 

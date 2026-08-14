@@ -9,6 +9,7 @@ import remarkRehype from 'remark-rehype';
 import { unified } from 'unified';
 import type { Element, Root as HastRoot } from 'hast';
 import type { Heading, PhrasingContent, Root as MdastRoot } from 'mdast';
+import { isInstantStorageUrl, parseDocumentImageRef } from './document-image';
 
 export type InterpretedMarkdown = {
   content: ReactNode;
@@ -49,6 +50,9 @@ function titleFrom(tree: MdastRoot) {
 }
 
 function safeUrl(url: string) {
+  if (parseDocumentImageRef(url)) return url;
+  if (isInstantStorageUrl(url)) return undefined;
+
   const colon = url.indexOf(':');
   const relativeMarker = url.search(/[/?#]/);
   if (colon < 0 || (relativeMarker >= 0 && relativeMarker < colon)) return url;
@@ -410,10 +414,56 @@ function mermaidSource(children: ReactNode) {
   return String(child.props.children ?? '').replace(/\n$/, '');
 }
 
+const DocumentImageContext = createContext<Record<string, string>>({});
+
+function usePrivateImageSrc(src: string | undefined) {
+  const local = Boolean(src && (src.startsWith('blob:') || src.startsWith('data:')));
+  const [remoteSrc, setRemoteSrc] = useState<string | undefined>();
+
+  useEffect(() => {
+    if (!src || src.startsWith('blob:') || src.startsWith('data:')) {
+      setRemoteSrc(undefined);
+      return;
+    }
+    setRemoteSrc(undefined);
+    let objectUrl: string | undefined;
+    let cancelled = false;
+    fetch(src)
+      .then((response) => {
+        if (!response.ok) throw new Error('unavailable');
+        return response.blob();
+      })
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setRemoteSrc(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setRemoteSrc(undefined);
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [src]);
+
+  if (!src) return undefined;
+  return local ? src : remoteSrc;
+}
+
+function MarkdownImage({ alt, src, ...props }: { alt?: string; src?: string } & Record<string, unknown>) {
+  const imageSources = useContext(DocumentImageContext);
+  const imageId = typeof src === 'string' ? parseDocumentImageRef(src) : undefined;
+  const privateSrc = usePrivateImageSrc(imageId ? imageSources[imageId] : undefined);
+  if (imageId) return privateSrc ? <img alt={alt ?? ''} src={privateSrc} {...props} /> : <span>{alt}</span>;
+  return src ? <img alt={alt ?? ''} src={src} {...props} /> : <span>{alt}</span>;
+}
+
 const markdownComponents: NonNullable<RehypeReactOptions['components']> = {
   a({ children, href, ...props }) {
     return href ? <a href={href} {...props}>{children}</a> : <span>{children}</span>;
   },
+  img: MarkdownImage,
   pre({ children }) {
     const source = mermaidSource(children);
     return source === null ? <pre>{children}</pre> : <MermaidDiagram source={source} />;
@@ -461,10 +511,13 @@ export function downloadMarkdown(document: InterpretedMarkdown) {
 
 export function MarkdownView({
   document,
+  imageSources,
   onMermaidExpand,
   openMermaidId,
 }: {
   document: InterpretedMarkdown;
+  /** Capability-resolved document image sources; never Instant file URLs from Markdown. */
+  imageSources?: Record<string, string>;
   /** Connect this to a viewer/dialog if expanded diagrams should be available. */
   onMermaidExpand?: MermaidExpandHandler;
   /**
@@ -473,5 +526,7 @@ export function MarkdownView({
    */
   openMermaidId?: string;
 }) {
-  return <MermaidExpandContext.Provider value={{ onExpand: onMermaidExpand, openMermaidId }}>{document.content}</MermaidExpandContext.Provider>;
+  return <DocumentImageContext.Provider value={imageSources ?? {}}>
+    <MermaidExpandContext.Provider value={{ onExpand: onMermaidExpand, openMermaidId }}>{document.content}</MermaidExpandContext.Provider>
+  </DocumentImageContext.Provider>;
 }

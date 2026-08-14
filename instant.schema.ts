@@ -2,7 +2,13 @@ import { i } from '@instantdb/react';
 
 // The document ID is generated client-side as the opaque share capability.
 // The edit ID remains private to the editor session; it is not part of a Share Link.
+// Pasted images live at documents/{documentId}/{imageId} and are retrieved only
+// with that document capability.
 const schema = i.graph({
+  $files: i.entity({
+    path: i.string().unique().indexed(),
+    url: i.string(),
+  }),
   documents: i.entity({
     title: i.string(),
     markdown: i.string(),
