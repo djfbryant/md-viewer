@@ -2,5 +2,6 @@
   "version": 2,
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "crons": [{ "path": "/api/cleanup", "schedule": "0 4 * * *" }],
+  "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }]
 }

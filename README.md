@@ -37,6 +37,19 @@ Import this repository in Vercel (or run `npx vercel`). Set `VITE_INSTANT_APP_ID
 
 The application uses self-hosted Inter assets from `@fontsource/inter`; it makes no Google Fonts request.
 
+Expired and deleted documents stay unavailable immediately. A daily Vercel cron at `/api/cleanup` then removes those records and any owned images. Set these server-only variables in Vercel (and `.env.local` if you invoke the route locally):
+
+```
+INSTANT_APP_ADMIN_TOKEN=your-instant-admin-token
+CRON_SECRET=a-long-random-string
+```
+
+`INSTANT_APP_ID` may be set as well; otherwise the cleanup job uses `VITE_INSTANT_APP_ID`. After adding expiry fields, push the Instant schema:
+
+```sh
+npx instant-cli push schema --yes
+```
+
 ## Responsive verification
 
 The responsive test protects the shell lock and both breakpoints. Before a release, run the app and check the following browser measurements at 700px height: `document.documentElement.scrollWidth === clientWidth` and `scrollHeight === clientHeight`. Use 1920, 1440, 1280, 1024, 900, 768, 620, 420, and 320px widths. At 900px the splitter must remain visible; below it, Edit/Preview tabs replace the split panes. This browser pass was completed for this bootstrap.

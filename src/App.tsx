@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getShareId, sharePath, shareUrl } from './document';
+import { getShareId, sharePath, shareUrl, formatExpiry, toDatetimeLocalValue } from './document';
 import { type SharedDocument } from './document-lifecycle';
 import { MAX_SPLIT, MIN_SPLIT, useEditorSession, useEditorSplit } from './editor-session';
 import { documentLifecycle } from './lib/instant-document-persistence';
@@ -67,7 +67,9 @@ function Home({ preference, onCycle, onCreate }: { preference: ThemePreference; 
 
 function Editor({ preference, onCycle, onBack, onNavigate }: { preference: ThemePreference; onCycle: () => void; onBack: () => void; onNavigate: (path: string) => void }) {
   const [tab, setTab] = useState<'write' | 'preview'>('write');
-  const session = useEditorSession(documentLifecycle.save);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const session = useEditorSession(documentLifecycle);
   const split = useEditorSplit();
   const { markdown, isSaving, save } = session;
   const interpreted = useMemo(() => interpretMarkdown(markdown), [markdown]);
@@ -97,6 +99,7 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
         <div className="bar-actions">
           <ThemeButton preference={preference} onCycle={onCycle} />
           <label className="button import-button"><span>Import .md</span><input type="file" accept=".md,text/markdown,text/plain" onChange={session.importMarkdown} /></label>
+          {session.publishedId && <button className="button share-button" onClick={() => setShareOpen(true)} aria-label="Share"><span className="share-long">Share</span><span className="share-short" aria-hidden="true">↗</span></button>}
           <button className="button button--primary" onClick={() => void save()} disabled={isSaving}><span className="save-long">{isSaving ? 'Saving…' : 'Save changes'}</span><span className="save-short">Save</span></button>
         </div>
       </header>
@@ -117,11 +120,51 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
           <div className="preview"><article className={markdown ? 'markdown' : 'preview-placeholder'}>{markdown ? <RenderedDocument document={interpreted} /> : <><h1>Your preview will appear here</h1><p>Write Markdown, then save a read-only share link.</p></>}</article></div>
         </section>
       </div>
-      <footer className="status-footer"><span>{markdown.trim() ? `${markdown.trim().split(/\s+/).length} words` : 'Draft document'}</span><span className="status-url">{session.publishedId ? shareUrl(session.publishedId) : 'Save to create a share link'}</span></footer>
+      <footer className="status-footer">
+        <span>{markdown.trim() ? `${markdown.trim().split(/\s+/).length} words` : 'Draft document'}</span>
+        <span>{formatExpiry(session.expiresAt)}</span>
+        <span className="status-url">{session.publishedId ? shareUrl(session.publishedId) : 'Save to create a share link'}</span>
+      </footer>
       {session.recoveredDraft && <div className="toast" role="status">Recovered unsaved local draft.<button className="toast-dismiss" onClick={session.dismissRecoveredDraft} aria-label="Dismiss recovery message">×</button></div>}
       {session.saveError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="save-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissSaveError(); }}><h2 id="save-error-title">Document not saved</h2><p>{session.saveError}</p><button autoFocus className="button button--primary" onClick={session.dismissSaveError}>Done</button></section></div>}
       {session.importError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="import-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissImportError(); }}><h2 id="import-error-title">Markdown not imported</h2><p>{session.importError}</p><button autoFocus className="button button--primary" onClick={session.dismissImportError}>Done</button></section></div>}
+      {session.deleteError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="delete-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissDeleteError(); }}><h2 id="delete-error-title">Document not deleted</h2><p>{session.deleteError}</p><button autoFocus className="button button--primary" onClick={session.dismissDeleteError}>Done</button></section></div>}
       {session.savedNotice && session.publishedId && <div className="toast" role="status">Changes saved. <button className="toast-link" onClick={() => onNavigate(sharePath(session.publishedId!))}>Open share link</button></div>}
+      {shareOpen && !confirmDelete && session.publishedId && <div className="dialog-backdrop" role="presentation" onClick={() => { setShareOpen(false); setConfirmDelete(false); }}>
+        <section className="dialog" role="dialog" aria-labelledby="share-title" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === 'Escape') { setShareOpen(false); setConfirmDelete(false); } }}>
+          <h2 id="share-title">Your document is live</h2>
+          <p>Anyone with the share link can read it. No one can change it.</p>
+          <div className="dialog-field">
+            <span className="label">Share link — read only</span>
+            <span className="link-box">{shareUrl(session.publishedId)}</span>
+          </div>
+          <div className="dialog-field">
+            <span className="label">Expiry</span>
+            <p className="dialog-help">{formatExpiry(session.expiresAt)}</p>
+            <div className="dialog-row">
+              <input
+                type="datetime-local"
+                aria-label="Expiry date and time"
+                value={session.expiresAt ? toDatetimeLocalValue(session.expiresAt) : ''}
+                onChange={(event) => { void save({ expiresAt: event.target.value ? new Date(event.target.value) : null }); }}
+              />
+              {session.expiresAt && <button className="button button--small" onClick={() => void save({ expiresAt: null })}>Remove</button>}
+            </div>
+          </div>
+          <div className="dialog-actions dialog-actions--split">
+            <button className="button button--quiet button--danger" onClick={() => setConfirmDelete(true)}>Delete document</button>
+            <button className="button button--primary" onClick={() => { setShareOpen(false); setConfirmDelete(false); }}>Done</button>
+          </div>
+        </section>
+      </div>}
+      {confirmDelete && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="delete-title" onKeyDown={(event) => { if (event.key === 'Escape') setConfirmDelete(false); }}>
+        <h2 id="delete-title">Delete this document?</h2>
+        <p>The share link will become unavailable immediately. The document and its images are removed by the daily cleanup.</p>
+        <div className="dialog-actions">
+          <button className="button" onClick={() => setConfirmDelete(false)}>Cancel</button>
+          <button autoFocus className="button button--danger" onClick={() => { void session.deleteDocument().then((outcome) => { if (outcome.kind === 'deleted') { setConfirmDelete(false); setShareOpen(false); onBack(); } }); }}>Delete document</button>
+        </div>
+      </section></div>}
     </main>
   );
 }
@@ -141,7 +184,10 @@ function Reader({ document }: { document: SharedDocument }) {
   const interpreted = useMemo(() => interpretMarkdown(document.markdown), [document.markdown]);
 
   return <ReaderLayout
-    actions={<button className="button" onClick={() => downloadMarkdown(interpreted)}>Download .md</button>}
+    actions={<>
+      <span className="reader-expiry">{formatExpiry(document.expiresAt)}</span>
+      <button className="button" onClick={() => downloadMarkdown(interpreted)}>Download .md</button>
+    </>}
     title={interpreted.title}
   ><div className="reader-content"><article className="markdown"><RenderedDocument document={interpreted} /></article></div></ReaderLayout>;
 }
@@ -151,7 +197,17 @@ function MissingDocument() {
 }
 
 function ShareRoute({ documentId }: { documentId: string }) {
+  const [, setTick] = useState(0);
   const outcome = documentLifecycle.useShareDocument(documentId);
+
+  useEffect(() => {
+    if (outcome.kind !== 'available' || !outcome.document.expiresAt) return;
+    const delay = outcome.document.expiresAt.getTime() - Date.now();
+    if (delay > 2_147_483_647) return;
+    const timeout = window.setTimeout(() => setTick((tick) => tick + 1), Math.max(0, delay));
+    return () => window.clearTimeout(timeout);
+  }, [outcome]);
+
   if (outcome.kind === 'loading') return <ReaderLayout><section className="reader-message"><p>Opening document…</p></section></ReaderLayout>;
   return outcome.kind === 'available' ? <Reader document={outcome.document} /> : <MissingDocument />;
 }

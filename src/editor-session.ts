@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import type { EditCapability, SaveDocumentOutcome } from './document-lifecycle';
+import type { DocumentLifecycle, EditCapability, SaveDocumentOutcome } from './document-lifecycle';
 
 const RECOVERY_KEY = 'markshare-editor-recovery-v1';
 const DEFAULT_SPLIT = 50;
@@ -44,19 +44,24 @@ function persistRecovery(recovery: Recovery) {
   }
 }
 
-export function useEditorSession(saveDocument: (markdown: string, existing?: EditCapability) => Promise<SaveDocumentOutcome>) {
+export function useEditorSession(lifecycle: Pick<DocumentLifecycle, 'save' | 'delete'>) {
   const [recovery] = useState(readRecovery);
   const [markdown, setMarkdown] = useState(recovery.markdown);
   const [publishedMarkdown, setPublishedMarkdown] = useState(recovery.publishedMarkdown);
   const [publishedId, setPublishedId] = useState(recovery.publishedId);
   const [publishedEditId, setPublishedEditId] = useState(recovery.publishedEditId);
+  const [expiresAt, setExpiresAt] = useState<Date | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [recoveredDraft, setRecoveredDraft] = useState(Boolean(recovery.markdown && recovery.markdown !== recovery.publishedMarkdown));
   const [savedNotice, setSavedNotice] = useState(false);
 
   const hasUnsavedChanges = markdown !== publishedMarkdown;
+  const capability: EditCapability | undefined = publishedId && publishedEditId
+    ? { id: publishedId, editId: publishedEditId }
+    : undefined;
 
   useEffect(() => {
     persistRecovery({ markdown, publishedMarkdown, publishedId, publishedEditId });
@@ -74,18 +79,17 @@ export function useEditorSession(saveDocument: (markdown: string, existing?: Edi
     return () => window.clearTimeout(timeout);
   }, [recoveredDraft]);
 
-  const save = useCallback(async () => {
+  const save = useCallback(async (options?: { expiresAt?: Date | null }) => {
     setIsSaving(true);
     setSaveError(null);
-    const existing = publishedId && publishedEditId
-      ? { id: publishedId, editId: publishedEditId }
-      : undefined;
+    const nextExpiry = options && 'expiresAt' in options ? options.expiresAt ?? null : expiresAt;
     try {
-      const outcome = await saveDocument(markdown, existing);
+      const outcome = await lifecycle.save(markdown, capability, { expiresAt: nextExpiry });
       if (outcome.kind === 'published') {
         setPublishedMarkdown(outcome.document.markdown);
         setPublishedId(outcome.document.id);
         setPublishedEditId(outcome.document.editId);
+        setExpiresAt(outcome.document.expiresAt ?? nextExpiry);
         setRecoveredDraft(false);
         setSavedNotice(true);
       } else if (outcome.kind === 'not-configured') {
@@ -96,11 +100,33 @@ export function useEditorSession(saveDocument: (markdown: string, existing?: Edi
       return outcome;
     } catch {
       setSaveError('We could not save this document. Please try again.');
-      return { kind: 'failed' };
+      return { kind: 'failed' } satisfies SaveDocumentOutcome;
     } finally {
       setIsSaving(false);
     }
-  }, [markdown, publishedEditId, publishedId, saveDocument]);
+  }, [capability, expiresAt, lifecycle, markdown]);
+
+  const deleteDocument = useCallback(async () => {
+    if (!capability) return { kind: 'failed' as const };
+    setDeleteError(null);
+    try {
+      const outcome = await lifecycle.delete(capability);
+      if (outcome.kind === 'deleted') {
+        setMarkdown('');
+        setPublishedMarkdown('');
+        setPublishedId(null);
+        setPublishedEditId(null);
+        setExpiresAt(null);
+        persistRecovery({ markdown: '', publishedMarkdown: '', publishedId: null, publishedEditId: null });
+      } else {
+        setDeleteError('We could not delete this document. Please try again.');
+      }
+      return outcome;
+    } catch {
+      setDeleteError('We could not delete this document. Please try again.');
+      return { kind: 'failed' as const };
+    }
+  }, [capability, lifecycle]);
 
   const importMarkdown = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -118,16 +144,20 @@ export function useEditorSession(saveDocument: (markdown: string, existing?: Edi
     markdown,
     setMarkdown,
     publishedId,
+    expiresAt,
     hasUnsavedChanges,
     isSaving,
     saveError,
     importError,
+    deleteError,
     recoveredDraft,
     savedNotice,
     dismissRecoveredDraft: () => setRecoveredDraft(false),
     dismissSaveError: () => setSaveError(null),
     dismissImportError: () => setImportError(null),
+    dismissDeleteError: () => setDeleteError(null),
     save,
+    deleteDocument,
     importMarkdown,
   };
 }
