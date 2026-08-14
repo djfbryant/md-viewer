@@ -1,0 +1,63 @@
+.mermaid-viewer-backdrop {
+  position: fixed;
+  z-index: 10;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(12px, 2vw, 28px);
+  background: rgb(20 18 14 / .58);
+}
+
+.mermaid-viewer {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  width: min(1440px, 100%);
+  height: min(900px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.mermaid-viewer__toolbar {
+  display: flex;
+  align-items: center;
+  min-height: 52px;
+  gap: 12px;
+  padding: 8px 12px 8px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mermaid-viewer__title { margin: 0; font-weight: var(--weight-semibold); }
+.mermaid-viewer__controls { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.mermaid-viewer__zoom { min-width: 3.5rem; color: var(--ink-soft); font-family: var(--mono); font-size: var(--type-button-small-size); text-align: right; }
+.mermaid-viewer__close { min-width: 34px; font-size: 24px; line-height: 1; }
+.mermaid-viewer__help { margin: 0; padding: 7px 18px; border-bottom: 1px solid var(--line-soft); color: var(--ink-faint); font-size: var(--type-small-size); }
+
+.mermaid-viewer__viewport {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--sunken);
+  cursor: grab;
+  touch-action: none;
+}
+
+.mermaid-viewer__viewport:active { cursor: grabbing; }
+.mermaid-viewer__diagram { position: absolute; top: 50%; left: 50%; transform-origin: center; will-change: transform; }
+.mermaid-viewer__diagram svg { display: block; max-width: none; height: auto; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .mermaid-viewer__diagram { transition: transform 100ms ease-out; }
+}
+
+@media (max-width: 619px) {
+  .mermaid-viewer-backdrop { padding: 0; }
+  .mermaid-viewer { width: 100%; height: 100%; border: 0; border-radius: 0; }
+  .mermaid-viewer__toolbar { gap: 8px; padding-left: 12px; }
+  .mermaid-viewer__title { display: none; }
+  .mermaid-viewer__controls { margin-left: 0; }
+  .mermaid-viewer__help { padding: 6px 12px; }
+}

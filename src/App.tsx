@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { getShareId, sharePath, shareUrl } from './document';
 import { type SharedDocument } from './document-lifecycle';
 import { documentLifecycle } from './lib/instant-document-persistence';
-import { downloadMarkdown, interpretMarkdown, MarkdownView } from './markdown';
+import { downloadMarkdown, interpretMarkdown, MarkdownView, type InterpretedMarkdown, type MermaidExpandRequest } from './markdown';
+import { MermaidViewer } from './mermaid-viewer';
 import { applyTheme, getStoredTheme, nextTheme, type ThemePreference, storeTheme } from './theme';
 
 const DEFAULT_SPLIT = 50;
@@ -19,6 +20,25 @@ function ThemeButton({ preference, onCycle }: { preference: ThemePreference; onC
 
 function Brand({ showName = true }: { showName?: boolean }) {
   return <div className="brand"><span className="mark" aria-hidden="true" />{showName && <span className="brand-name">MarkShare</span>}</div>;
+}
+
+/** Keeps Preview and Share Link on the same Mermaid presentation and viewer path. */
+function RenderedDocument({ document }: { document: InterpretedMarkdown }) {
+  const [expandedMermaid, setExpandedMermaid] = useState<MermaidExpandRequest | null>(null);
+
+  return <>
+    <MarkdownView
+      document={document}
+      openMermaidId={expandedMermaid?.id}
+      onMermaidExpand={setExpandedMermaid}
+    />
+    {expandedMermaid && <MermaidViewer
+      open
+      svg={expandedMermaid.svg}
+      returnFocusRef={expandedMermaid.returnFocusRef}
+      onClose={() => setExpandedMermaid(null)}
+    />}
+  </>;
 }
 
 function Home({ preference, onCycle, onCreate }: { preference: ThemePreference; onCycle: () => void; onCreate: () => void }) {
@@ -136,7 +156,7 @@ function Editor({ preference, onCycle, onBack, onNavigate }: { preference: Theme
         <button className="splitter" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} onDoubleClick={resetSplit} onKeyDown={resizeByKeyboard} role="separator" aria-orientation="vertical" aria-label="Resize the write and preview panes" aria-valuenow={Math.round(split)} aria-valuemin={MIN_SPLIT} aria-valuemax={MAX_SPLIT} title="Drag to resize · double-click to reset" />
         <section className="pane pane-preview" aria-label="Document preview">
           <div className="pane-head"><span className="label">Preview</span><span className="preview-note">matches share link</span></div>
-          <div className="preview"><article className={markdown ? 'markdown' : 'preview-placeholder'}>{markdown ? <MarkdownView document={interpreted} /> : <><h1>Your preview will appear here</h1><p>Write Markdown, then publish a read-only share link.</p></>}</article></div>
+          <div className="preview"><article className={markdown ? 'markdown' : 'preview-placeholder'}>{markdown ? <RenderedDocument document={interpreted} /> : <><h1>Your preview will appear here</h1><p>Write Markdown, then publish a read-only share link.</p></>}</article></div>
         </section>
       </div>
       <footer className="status-footer"><span>{markdown.trim() ? `${markdown.trim().split(/\s+/).length} words` : 'Draft document'}</span><span className="status-url">{publishedId ? shareUrl(publishedId) : 'Publish to create a share link'}</span></footer>
@@ -163,7 +183,7 @@ function Reader({ document }: { document: SharedDocument }) {
   return <ReaderLayout
     actions={<button className="button" onClick={() => downloadMarkdown(interpreted)}>Download .md</button>}
     title={interpreted.title}
-  ><div className="reader-content"><article className="markdown"><MarkdownView document={interpreted} /></article></div></ReaderLayout>;
+  ><div className="reader-content"><article className="markdown"><RenderedDocument document={interpreted} /></article></div></ReaderLayout>;
 }
 
 function MissingDocument() {
