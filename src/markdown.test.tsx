@@ -295,31 +295,34 @@ describe('Markdown interpretation', () => {
     valid.unmount();
 
     render(<MarkdownView document={interpretMarkdown('```mermaid\nnot a diagram\n```')} />);
-    expect(await screen.findByText('This diagram could not be rendered safely.')).toBeInTheDocument();
+    expect(await screen.findByText('This diagram could not be displayed.')).toBeInTheDocument();
+    expect(screen.queryByText('This diagram could not be rendered safely.')).not.toBeInTheDocument();
     expect(screen.getByText('not a diagram')).toBeInTheDocument();
   });
 
-  it('falls back safely when sanitized Mermaid output has no usable geometry', async () => {
+  it('shows a display fallback when sanitized Mermaid output has no usable geometry', async () => {
     render(<MarkdownView document={interpretMarkdown('```mermaid\nmalformed geometry\n```')} />);
 
-    expect(await screen.findByText('This diagram could not be rendered safely.')).toBeInTheDocument();
+    expect(await screen.findByText('This diagram could not be displayed.')).toBeInTheDocument();
+    expect(screen.queryByText('This diagram could not be rendered safely.')).not.toBeInTheDocument();
     expect(screen.getByText('malformed geometry')).toBeInTheDocument();
   });
 
   it('rejects interactive Mermaid input and sanitizes renderer output', async () => {
-    mermaidApi.render.mockClear();
-    const hostileSource = [
-      '```mermaid',
-      '%%{init: {"securityLevel": "loose"}}%%',
-      'graph TD',
-      'click A "javascript:alert(1)"',
-      '```',
-    ].join('\n');
-    const hostile = render(<MarkdownView document={interpretMarkdown(hostileSource)} />);
+    const hostileSources = [
+      ['%%{init: {"securityLevel": "loose"}}%%', 'graph TD', 'A-->B'].join('\n'),
+      ['flowchart LR', 'A[User]', 'click A "https://example.com"'].join('\n'),
+      ['flowchart LR', 'A[javascript:alert(1)]'].join('\n'),
+    ];
 
-    expect(await screen.findByText('This diagram could not be rendered safely.')).toBeInTheDocument();
-    expect(mermaidApi.render).not.toHaveBeenCalled();
-    hostile.unmount();
+    for (const source of hostileSources) {
+      mermaidApi.render.mockClear();
+      const hostile = render(<MarkdownView document={interpretMarkdown(`\`\`\`mermaid\n${source}\n\`\`\``)} />);
+
+      expect(await screen.findByText('This diagram could not be rendered safely.')).toBeInTheDocument();
+      expect(mermaidApi.render).not.toHaveBeenCalled();
+      hostile.unmount();
+    }
 
     const output = render(<MarkdownView document={interpretMarkdown('```mermaid\nunsafe output\n```')} />);
     expect(await screen.findByRole('img', { name: 'Mermaid diagram' })).toBeInTheDocument();

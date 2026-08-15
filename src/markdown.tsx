@@ -110,7 +110,7 @@ function allowsStrictMermaid(source: string) {
 type MermaidState =
   | { kind: 'loading' }
   | { kind: 'rendered'; svg: string }
-  | { kind: 'invalid' };
+  | { kind: 'invalid'; reason: 'blocked' | 'undisplayable' };
 
 export type MermaidGeometry = {
   height: number;
@@ -273,7 +273,7 @@ function MermaidDiagram({ source }: { source: string }) {
     setOverflowHintDismissed(false);
 
     if (!allowsStrictMermaid(source)) {
-      setState({ kind: 'invalid' });
+      setState({ kind: 'invalid', reason: 'blocked' });
       return () => { active = false; };
     }
 
@@ -282,10 +282,10 @@ function MermaidDiagram({ source }: { source: string }) {
       .then(({ svg }) => {
         const sanitizedSvg = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
         const normalizedSvg = normalizeMermaidSvg(sanitizedSvg);
-        if (active) setState(normalizedSvg ? { kind: 'rendered', svg: normalizedSvg } : { kind: 'invalid' });
+        if (active) setState(normalizedSvg ? { kind: 'rendered', svg: normalizedSvg } : { kind: 'invalid', reason: 'undisplayable' });
       })
       .catch(() => {
-        if (active) setState({ kind: 'invalid' });
+        if (active) setState({ kind: 'invalid', reason: 'undisplayable' });
       });
 
     return () => { active = false; };
@@ -403,7 +403,9 @@ function MermaidDiagram({ source }: { source: string }) {
 
   if (state.kind === 'invalid') {
     return <figure className="mermaid-fallback">
-      <figcaption>This diagram could not be rendered safely.</figcaption>
+      <figcaption>{state.reason === 'blocked'
+        ? 'This diagram could not be rendered safely.'
+        : 'This diagram could not be displayed.'}</figcaption>
       <pre><code className="language-mermaid">{source}</code></pre>
     </figure>;
   }
