@@ -111,6 +111,13 @@ describe('Markdown interpretation', () => {
     expect(container.querySelector('[onerror]')).toBeNull();
   });
 
+  it('does not send the share link as a referrer when a reader follows a document link', () => {
+    render(<MarkdownView document={interpretMarkdown('[Example](https://example.com/notes)')} />);
+    expect(screen.getByRole('link', { name: 'Example' })).toHaveAttribute('href', 'https://example.com/notes');
+    expect(screen.getByRole('link', { name: 'Example' })).toHaveAttribute('rel', 'noreferrer');
+    expect(screen.getByRole('link', { name: 'Example' })).toHaveAttribute('referrerPolicy', 'no-referrer');
+  });
+
   it('renders document-scoped images only when capability-resolved sources are provided', () => {
     const source = '![Dashboard sketch](markshare-image:pasted-image)';
     const unresolved = render(<MarkdownView document={interpretMarkdown(source)} />);

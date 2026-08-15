@@ -3,5 +3,37 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "crons": [{ "path": "/api/cleanup", "schedule": "0 4 * * *" }],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow, noarchive" },
+        { "key": "Referrer-Policy", "value": "no-referrer" }
+      ]
+    },
+    {
+      "source": "/",
+      "headers": [{ "key": "X-Robots-Tag", "value": "index, follow" }]
+    },
+    {
+      "source": "/about",
+      "headers": [{ "key": "X-Robots-Tag", "value": "index, follow" }]
+    },
+    {
+      "source": "/privacy",
+      "headers": [{ "key": "X-Robots-Tag", "value": "index, follow" }]
+    },
+    {
+      "source": "/acceptable-use",
+      "headers": [{ "key": "X-Robots-Tag", "value": "index, follow" }]
+    }
+  ],
+  "routes": [
+    {
+      "src": "/new",
+      "missing": [{ "type": "header", "key": "accept-language" }],
+      "mitigate": { "action": "challenge" }
+    }
+  ],
   "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }]
 }

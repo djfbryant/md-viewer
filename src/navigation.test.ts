@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { editPath, recognizeRoute, sharePath } from './navigation';
+import {
+  editPath,
+  privacyFor,
+  PRIVATE_ROBOTS,
+  PUBLIC_PREVIEW_DESCRIPTION,
+  PUBLIC_PREVIEW_TITLE,
+  PUBLIC_ROBOTS,
+  recognizeRoute,
+  REFERRER_POLICY,
+  responseHeadersFor,
+  robotsTxt,
+  sharePath,
+} from './navigation';
 
 describe('document routes', () => {
   it('round-trips opaque share and edit IDs and keeps their capabilities distinct', () => {
@@ -42,5 +54,45 @@ describe('document routes', () => {
     expect(recognizeRoute('/e/')).toEqual({ kind: 'unavailable' });
     expect(recognizeRoute('/secret-notes')).toEqual({ kind: 'unavailable' });
     expect(recognizeRoute('/edit/private-edit')).toEqual({ kind: 'unavailable' });
+  });
+
+  it('keeps Share Links, Edit Links, the editor, and unknown paths out of indexes and referrers', () => {
+    const share = privacyFor(recognizeRoute('/s/opaque-id'));
+    expect(share).toEqual({
+      pageTitle: PUBLIC_PREVIEW_TITLE,
+      robots: PRIVATE_ROBOTS,
+      referrer: REFERRER_POLICY,
+      previewTitle: PUBLIC_PREVIEW_TITLE,
+      previewDescription: PUBLIC_PREVIEW_DESCRIPTION,
+    });
+    expect(share.previewTitle).not.toContain('opaque-id');
+    expect(privacyFor(recognizeRoute('/e/private-edit')).robots).toBe(PRIVATE_ROBOTS);
+    expect(privacyFor(recognizeRoute('/new')).robots).toBe(PRIVATE_ROBOTS);
+    expect(privacyFor(recognizeRoute('/secret-notes')).robots).toBe(PRIVATE_ROBOTS);
+    expect(privacyFor(recognizeRoute('/')).robots).toBe(PUBLIC_ROBOTS);
+    expect(privacyFor(recognizeRoute('/about')).robots).toBe(PUBLIC_ROBOTS);
+    expect(privacyFor(recognizeRoute('/about'), { about: 'About MarkShare', privacy: 'Privacy', 'acceptable-use': 'Acceptable use' }).pageTitle).toBe('About MarkShare · MarkShare');
+    expect(privacyFor(recognizeRoute('/privacy')).robots).toBe(PUBLIC_ROBOTS);
+    expect(privacyFor(recognizeRoute('/acceptable-use')).robots).toBe(PUBLIC_ROBOTS);
+  });
+
+  it('emits generic preview headers for Share Links and never content-derived values', () => {
+    expect(responseHeadersFor('/s/opaque-id')).toEqual([
+      { key: 'X-Robots-Tag', value: PRIVATE_ROBOTS },
+      { key: 'Referrer-Policy', value: REFERRER_POLICY },
+    ]);
+    expect(responseHeadersFor('/e/private-edit')).toEqual(responseHeadersFor('/s/opaque-id'));
+    expect(responseHeadersFor('/new')).toEqual(responseHeadersFor('/s/opaque-id'));
+    expect(responseHeadersFor('/secret-notes')).toEqual(responseHeadersFor('/s/opaque-id'));
+    expect(responseHeadersFor('/')).toEqual([
+      { key: 'X-Robots-Tag', value: PUBLIC_ROBOTS },
+      { key: 'Referrer-Policy', value: REFERRER_POLICY },
+    ]);
+    expect(responseHeadersFor('/about')).toEqual(responseHeadersFor('/'));
+    expect(JSON.stringify(responseHeadersFor('/s/secret-notes'))).not.toMatch(/secret-notes/i);
+  });
+
+  it('tells crawlers not to fetch Share Links, Edit Links, or the editor', () => {
+    expect(robotsTxt()).toBe('User-agent: *\nAllow: /\nDisallow: /s/\nDisallow: /e/\nDisallow: /new\n');
   });
 });

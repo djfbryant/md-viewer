@@ -63,6 +63,9 @@ describe('MarkShare shell', () => {
     expect(screen.getByRole('heading', { name: 'Privacy' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /create a document/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Document unavailable' })).not.toBeInTheDocument();
+    expect(document.title).toBe('Privacy · MarkShare');
+    expect(document.querySelector('meta[name="robots"]')).toHaveAttribute('content', 'index, follow');
+    expect(document.querySelector('meta[property="og:title"]')).toHaveAttribute('content', 'MarkShare');
   });
 
   it('loads About from /about instead of showing Document unavailable', () => {

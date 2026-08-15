@@ -114,6 +114,51 @@ describe('Document lifecycle', () => {
     expect(lifecycle.useShareDocument('unknown')).toEqual(unavailable);
   });
 
+  it('rate-limits public creation and image upload without publishing', async () => {
+    const store = memoryStore();
+    const png = (id: string) => ({ id, file: new File(['x'], `${id}.png`, { type: 'image/png' }) });
+    const createIds = ['one-id', 'one-edit', 'two-id', 'two-edit', 'three-id', 'three-edit'];
+    const lifecycle = createDocumentLifecycle(store, () => createIds.shift()!, () => new Date('2026-08-13T12:00:00Z'), undefined, {
+      create: { max: 2, windowMs: 60 * 60 * 1000 },
+      upload: { max: 2, windowMs: 60 * 60 * 1000 },
+    });
+
+    await expect(lifecycle.save('# One')).resolves.toMatchObject({ kind: 'published' });
+    await expect(lifecycle.save('# Two')).resolves.toMatchObject({ kind: 'published' });
+    await expect(lifecycle.save('# Three')).resolves.toEqual({ kind: 'rate-limited', limit: 'create' });
+    expect(store.documents.size).toBe(2);
+    await expect(lifecycle.save('# Illustrated', undefined, { images: [png('a'), png('b')] })).resolves.toEqual({
+      kind: 'rate-limited',
+      limit: 'create',
+    });
+
+    const ids = ['keep-id', 'keep-edit'];
+    const revision = createDocumentLifecycle(store, () => ids.shift()!, () => new Date('2026-08-13T12:00:00Z'), undefined, {
+      create: { max: 20, windowMs: 60 * 60 * 1000 },
+      upload: { max: 2, windowMs: 60 * 60 * 1000 },
+    });
+    const published = await revision.save('# Keep');
+    if (published.kind !== 'published') throw new Error('Expected save to succeed');
+    await expect(revision.save('# Keep', published.document, { images: [png('one'), png('two')] })).resolves.toMatchObject({ kind: 'published' });
+    await expect(revision.save('# Keep', published.document, { images: [png('three')] })).resolves.toEqual({ kind: 'rate-limited', limit: 'upload' });
+    expect(store.images.get(published.document.id)).toHaveLength(2);
+  });
+
+  it('allows another create after the rate-limit window elapses', async () => {
+    const store = memoryStore();
+    let now = new Date('2026-08-13T12:00:00Z');
+    const ids = ['first-id', 'first-edit', 'later-id', 'later-edit'];
+    const lifecycle = createDocumentLifecycle(store, () => ids.shift()!, () => now, undefined, {
+      create: { max: 1, windowMs: 60 * 60 * 1000 },
+      upload: { max: 1, windowMs: 60 * 60 * 1000 },
+    });
+
+    await expect(lifecycle.save('# First')).resolves.toMatchObject({ kind: 'published' });
+    await expect(lifecycle.save('# Blocked')).resolves.toEqual({ kind: 'rate-limited', limit: 'create' });
+    now = new Date('2026-08-13T13:00:00Z');
+    await expect(lifecycle.save('# Later')).resolves.toMatchObject({ kind: 'published', document: { markdown: '# Later' } });
+  });
+
   it('translates a persistence failure to a generic publish failure', async () => {
     const persistence: DocumentPersistence = {
       save: vi.fn().mockRejectedValue(new Error('network error')),

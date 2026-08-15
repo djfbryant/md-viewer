@@ -6,9 +6,30 @@ import { MAX_SPLIT, MIN_SPLIT, recallEditAccess, useEditorSession, useEditorSpli
 import { documentLifecycle } from './lib/instant-document-persistence';
 import { downloadMarkdown, interpretMarkdown, MarkdownView, type InterpretedMarkdown, type MermaidExpandRequest } from './markdown';
 import { MermaidViewer } from './mermaid-viewer';
-import { EDITOR_PATH, editPath, editUrl, infoPath, onPathChange, pushPath, recognizeRoute, replacePath, sharePath, shareUrl, type InfoPage } from './navigation';
+import { EDITOR_PATH, editPath, editUrl, infoPath, onPathChange, privacyFor, pushPath, recognizeRoute, replacePath, sharePath, shareUrl, type InfoPage, type RoutePrivacy } from './navigation';
 import { infoCopy, infoNav } from './public-information';
 import { applyTheme, getStoredTheme, nextTheme, type ThemePreference, storeTheme } from './theme';
+
+function upsertMeta(attribute: 'name' | 'property', key: string, content: string) {
+  const selector = `meta[${attribute}="${key}"]`;
+  let element = window.document.head.querySelector(selector);
+  if (!element) {
+    element = window.document.createElement('meta');
+    element.setAttribute(attribute, key);
+    window.document.head.append(element);
+  }
+  element.setAttribute('content', content);
+}
+
+function applyRoutePrivacy(privacy: RoutePrivacy) {
+  window.document.title = privacy.pageTitle;
+  upsertMeta('name', 'robots', privacy.robots);
+  upsertMeta('name', 'referrer', privacy.referrer);
+  upsertMeta('property', 'og:title', privacy.previewTitle);
+  upsertMeta('property', 'og:description', privacy.previewDescription);
+  upsertMeta('name', 'twitter:title', privacy.previewTitle);
+  upsertMeta('name', 'twitter:description', privacy.previewDescription);
+}
 
 function ThemeButton({ preference, onCycle }: { preference: ThemePreference; onCycle: () => void }) {
   const symbol = preference === 'system' ? '◐' : preference === 'light' ? '☀' : '☾';
@@ -125,10 +146,6 @@ function Info({
   onNavigate: (path: string) => void;
 }) {
   const copy = infoCopy[page];
-
-  useEffect(() => {
-    window.document.title = `${copy.title} · MarkShare`;
-  }, [copy.title]);
 
   return (
     <main className="info-shell">
@@ -335,10 +352,6 @@ function Editor({
 }
 
 function ReaderLayout({ actions, children, title }: { actions?: React.ReactNode; children: React.ReactNode; title?: string }) {
-  useEffect(() => {
-    window.document.title = title ? `${title} · MarkShare` : 'MarkShare';
-  }, [title]);
-
   return <main className="reader-shell">
     <header className="app-bar reader-bar"><Brand />{title && <div className="document-title"><span>{title}</span><span className="pill">Read only</span></div>}{actions && <div className="bar-actions">{actions}</div>}</header>
     {children}
@@ -390,8 +403,12 @@ export function App() {
   const route = recognizeRoute(pathname);
 
   useEffect(() => {
-    if (route.kind !== 'share' && route.kind !== 'info') window.document.title = 'MarkShare';
-  }, [route.kind]);
+    applyRoutePrivacy(privacyFor(recognizeRoute(pathname), {
+      about: infoCopy.about.title,
+      privacy: infoCopy.privacy.title,
+      'acceptable-use': infoCopy['acceptable-use'].title,
+    }));
+  }, [pathname]);
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
