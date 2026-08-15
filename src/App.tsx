@@ -9,7 +9,7 @@ import { downloadMarkdown, interpretMarkdown, MarkdownView, type InterpretedMark
 import { MermaidViewer } from './mermaid-viewer';
 import { EDITOR_PATH, editPath, editUrl, infoPath, onPathChange, privacyFor, pushPath, recognizeRoute, replacePath, sharePath, shareUrl, type InfoPage, type RoutePrivacy } from './navigation';
 import { infoCopy, infoNav } from './public-information';
-import { applyTheme, getStoredTheme, nextTheme, type ThemePreference, storeTheme } from './theme';
+import { ThemeButton, ThemeProvider } from './theme-control';
 
 function upsertMeta(attribute: 'name' | 'property', key: string, content: string) {
   const selector = `meta[${attribute}="${key}"]`;
@@ -30,15 +30,6 @@ function applyRoutePrivacy(privacy: RoutePrivacy) {
   upsertMeta('property', 'og:description', privacy.previewDescription);
   upsertMeta('name', 'twitter:title', privacy.previewTitle);
   upsertMeta('name', 'twitter:description', privacy.previewDescription);
-}
-
-function ThemeButton({ preference, onCycle }: { preference: ThemePreference; onCycle: () => void }) {
-  const symbol = preference === 'system' ? '◐' : preference === 'light' ? '☀' : '☾';
-  return (
-    <button className="button button--quiet button--small" onClick={onCycle} aria-label={`Theme: ${preference}. Change theme`} title={`Theme: ${preference}`}>
-      <span aria-hidden="true">{symbol}</span>
-    </button>
-  );
 }
 
 function Brand({ showName = true }: { showName?: boolean }) {
@@ -111,14 +102,14 @@ function RenderedDocument({ document, imageSources }: { document: InterpretedMar
   </>;
 }
 
-function Home({ preference, onCycle, onCreate, onNavigate }: { preference: ThemePreference; onCycle: () => void; onCreate: () => void; onNavigate: (path: string) => void }) {
+function Home({ onCreate, onNavigate }: { onCreate: () => void; onNavigate: (path: string) => void }) {
   return (
     <main className="home-shell">
       <header className="app-bar home-bar">
         <Brand />
         <div className="bar-actions">
           <SiteLinks onNavigate={onNavigate} />
-          <ThemeButton preference={preference} onCycle={onCycle} />
+          <ThemeButton />
         </div>
       </header>
       <section className="home-content" aria-labelledby="home-title">
@@ -145,14 +136,10 @@ function Home({ preference, onCycle, onCreate, onNavigate }: { preference: Theme
 
 function Info({
   page,
-  preference,
-  onCycle,
   onHome,
   onNavigate,
 }: {
   page: InfoPage;
-  preference: ThemePreference;
-  onCycle: () => void;
   onHome: () => void;
   onNavigate: (path: string) => void;
 }) {
@@ -164,7 +151,7 @@ function Info({
         <button className="brand brand-button" onClick={onHome} aria-label="Back to MarkShare home"><Brand /></button>
         <div className="bar-actions">
           <SiteLinks current={page} onNavigate={onNavigate} />
-          <ThemeButton preference={preference} onCycle={onCycle} />
+          <ThemeButton />
         </div>
       </header>
       <article className="info-content" aria-labelledby="info-title">
@@ -186,15 +173,11 @@ function Info({
 }
 
 function Editor({
-  preference,
-  onCycle,
   onBack,
   onNavigate,
   onReplace,
   editId,
 }: {
-  preference: ThemePreference;
-  onCycle: () => void;
   onBack: () => void;
   onNavigate: (path: string) => void;
   onReplace: (path: string) => void;
@@ -267,7 +250,7 @@ function Editor({
           </span>
         </div>
         <div className="bar-actions">
-          <ThemeButton preference={preference} onCycle={onCycle} />
+          <ThemeButton />
           <label className="button import-button"><span>Import .md</span><input type="file" accept=".md,text/markdown,text/plain" onChange={session.importMarkdown} /></label>
           {session.publishedId && <button className="button share-button" onClick={() => setShareOpen(true)} aria-label="Share"><span className="share-long">Share</span><span className="share-short" aria-hidden="true">↗</span></button>}
           <button className="button button--primary" onClick={() => void publish()} disabled={isSaving}><span className="save-long">{isSaving ? 'Saving…' : 'Save changes'}</span><span className="save-short">Save</span></button>
@@ -389,9 +372,10 @@ function Editor({
   );
 }
 
+/** Every reader page carries the theme control, so a loading, expired, or broken link is never a locked theme. */
 function ReaderLayout({ actions, children, title }: { actions?: React.ReactNode; children: React.ReactNode; title?: string }) {
   return <main className="reader-shell">
-    <header className="app-bar reader-bar"><Brand />{title && <div className="document-title"><span>{title}</span><span className="pill">Read only</span></div>}{actions && <div className="bar-actions">{actions}</div>}</header>
+    <header className="app-bar reader-bar"><Brand />{title && <div className="document-title"><span>{title}</span><span className="pill">Read only</span></div>}<div className="bar-actions">{actions}<ThemeButton /></div></header>
     {children}
   </main>;
 }
@@ -434,9 +418,7 @@ function ShareRoute({ documentId, onEdit }: { documentId: string; onEdit: (editI
     : <MissingDocument />;
 }
 
-export function App() {
-  const [preference, setPreference] = useState<ThemePreference>(() => getStoredTheme());
-  const [isDark, setIsDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
+function CurrentRoute() {
   const [pathname, setPathname] = useState(() => window.location.pathname);
   const route = recognizeRoute(pathname);
 
@@ -448,22 +430,7 @@ export function App() {
     }));
   }, [pathname]);
 
-  useEffect(() => {
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const updateSystemTheme = (event: MediaQueryListEvent) => setIsDark(event.matches);
-    media.addEventListener('change', updateSystemTheme);
-    return () => media.removeEventListener('change', updateSystemTheme);
-  }, []);
-
-  useEffect(() => applyTheme(preference, isDark), [preference, isDark]);
-
   useEffect(() => onPathChange(() => setPathname(window.location.pathname)), []);
-
-  const cycleTheme = () => {
-    const next = nextTheme(preference);
-    storeTheme(next);
-    setPreference(next);
-  };
 
   const navigate = useCallback((path: string) => {
     pushPath(path);
@@ -485,8 +452,6 @@ export function App() {
     return (
       <Info
         page={route.page}
-        preference={preference}
-        onCycle={cycleTheme}
         onHome={() => navigate('/')}
         onNavigate={navigate}
       />
@@ -496,8 +461,6 @@ export function App() {
   if (route.kind === 'editor' || route.kind === 'edit') {
     return (
       <Editor
-        preference={preference}
-        onCycle={cycleTheme}
         onBack={() => navigate('/')}
         onNavigate={navigate}
         onReplace={replace}
@@ -506,5 +469,9 @@ export function App() {
     );
   }
 
-  return <Home preference={preference} onCycle={cycleTheme} onCreate={() => navigate(EDITOR_PATH)} onNavigate={navigate} />;
+  return <Home onCreate={() => navigate(EDITOR_PATH)} onNavigate={navigate} />;
+}
+
+export function App() {
+  return <ThemeProvider><CurrentRoute /></ThemeProvider>;
 }
