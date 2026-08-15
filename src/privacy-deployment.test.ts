@@ -54,8 +54,11 @@ describe('privacy and abuse deployment', () => {
     expect(bySource['/(.*)']).toEqual(headerMap(responseHeadersFor('/secret-notes')));
     expect(bySource['/']).toEqual({ 'X-Robots-Tag': PUBLIC_ROBOTS });
     expect(bySource['/about']).toEqual({ 'X-Robots-Tag': PUBLIC_ROBOTS });
+    expect(bySource['/about/']).toEqual({ 'X-Robots-Tag': PUBLIC_ROBOTS });
     expect(bySource['/privacy']).toEqual({ 'X-Robots-Tag': PUBLIC_ROBOTS });
+    expect(bySource['/privacy/']).toEqual({ 'X-Robots-Tag': PUBLIC_ROBOTS });
     expect(bySource['/acceptable-use']).toEqual({ 'X-Robots-Tag': PUBLIC_ROBOTS });
+    expect(bySource['/acceptable-use/']).toEqual({ 'X-Robots-Tag': PUBLIC_ROBOTS });
     expect(bySource['/(.*)']['X-Robots-Tag']).toBe(PRIVATE_ROBOTS);
     expect(vercel.routes).toEqual([{
       src: '/new',

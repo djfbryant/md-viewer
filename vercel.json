@@ -20,11 +20,23 @@
       "headers": [{ "key": "X-Robots-Tag", "value": "index, follow" }]
     },
     {
+      "source": "/about/",
+      "headers": [{ "key": "X-Robots-Tag", "value": "index, follow" }]
+    },
+    {
       "source": "/privacy",
       "headers": [{ "key": "X-Robots-Tag", "value": "index, follow" }]
     },
     {
+      "source": "/privacy/",
+      "headers": [{ "key": "X-Robots-Tag", "value": "index, follow" }]
+    },
+    {
       "source": "/acceptable-use",
+      "headers": [{ "key": "X-Robots-Tag", "value": "index, follow" }]
+    },
+    {
+      "source": "/acceptable-use/",
       "headers": [{ "key": "X-Robots-Tag", "value": "index, follow" }]
     }
   ],
