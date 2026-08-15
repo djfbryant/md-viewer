@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createDocumentLifecycle,
+  createLocalStorageAbuseStore,
+  createMemoryAbuseStore,
   type DocumentPersistence,
   type DocumentRemovalStore,
   type PersistedDocument,
@@ -112,6 +114,109 @@ describe('Document lifecycle', () => {
   it('returns an unavailable outcome for an unknown share ID', () => {
     const lifecycle = createDocumentLifecycle(memoryStore(), () => 'opaque-document-id');
     expect(lifecycle.useShareDocument('unknown')).toEqual(unavailable);
+  });
+
+  it('rate-limits public creation and image upload without publishing', async () => {
+    const store = memoryStore();
+    const png = (id: string) => ({ id, file: new File(['x'], `${id}.png`, { type: 'image/png' }) });
+    const createIds = ['one-id', 'one-edit', 'two-id', 'two-edit', 'three-id', 'three-edit'];
+    const lifecycle = createDocumentLifecycle(store, () => createIds.shift()!, () => new Date('2026-08-13T12:00:00Z'), undefined, {
+      create: { max: 2, windowMs: 60 * 60 * 1000 },
+      upload: { max: 2, windowMs: 60 * 60 * 1000 },
+    });
+
+    await expect(lifecycle.save('# One')).resolves.toMatchObject({ kind: 'published' });
+    await expect(lifecycle.save('# Two')).resolves.toMatchObject({ kind: 'published' });
+    await expect(lifecycle.save('# Three')).resolves.toEqual({ kind: 'rate-limited', limit: 'create' });
+    expect(store.documents.size).toBe(2);
+    await expect(lifecycle.save('# Illustrated', undefined, { images: [png('a'), png('b')] })).resolves.toEqual({
+      kind: 'rate-limited',
+      limit: 'create',
+    });
+
+    const ids = ['keep-id', 'keep-edit'];
+    const revision = createDocumentLifecycle(store, () => ids.shift()!, () => new Date('2026-08-13T12:00:00Z'), undefined, {
+      create: { max: 20, windowMs: 60 * 60 * 1000 },
+      upload: { max: 2, windowMs: 60 * 60 * 1000 },
+    });
+    const published = await revision.save('# Keep');
+    if (published.kind !== 'published') throw new Error('Expected save to succeed');
+    await expect(revision.save('# Keep', published.document, { images: [png('one'), png('two')] })).resolves.toMatchObject({ kind: 'published' });
+    await expect(revision.save('# Keep', published.document, { images: [png('three')] })).resolves.toEqual({ kind: 'rate-limited', limit: 'upload' });
+    expect(store.images.get(published.document.id)).toHaveLength(2);
+  });
+
+  it('allows another create after the rate-limit window elapses', async () => {
+    const store = memoryStore();
+    let now = new Date('2026-08-13T12:00:00Z');
+    const ids = ['first-id', 'first-edit', 'later-id', 'later-edit'];
+    const lifecycle = createDocumentLifecycle(store, () => ids.shift()!, () => now, undefined, {
+      create: { max: 1, windowMs: 60 * 60 * 1000 },
+      upload: { max: 1, windowMs: 60 * 60 * 1000 },
+    });
+
+    await expect(lifecycle.save('# First')).resolves.toMatchObject({ kind: 'published' });
+    await expect(lifecycle.save('# Blocked')).resolves.toEqual({ kind: 'rate-limited', limit: 'create' });
+    now = new Date('2026-08-13T13:00:00Z');
+    await expect(lifecycle.save('# Later')).resolves.toMatchObject({ kind: 'published', document: { markdown: '# Later' } });
+  });
+
+  it('keeps the create quota in a storage-backed abuse store after a new lifecycle', async () => {
+    const memory = new Map<string, string>();
+    const abuse = createLocalStorageAbuseStore({
+      getItem: (key) => memory.get(key) ?? null,
+      setItem: (key, value) => { memory.set(key, value); },
+    });
+    const limits = { create: { max: 1, windowMs: 60 * 60 * 1000 }, upload: { max: 1, windowMs: 60 * 60 * 1000 } };
+    const first = createDocumentLifecycle(memoryStore(), () => 'first-id', () => new Date('2026-08-13T12:00:00Z'), undefined, limits, abuse);
+    await expect(first.save('# First')).resolves.toMatchObject({ kind: 'published' });
+
+    const second = createDocumentLifecycle(memoryStore(), () => 'second-id', () => new Date('2026-08-13T12:00:00Z'), undefined, limits, createLocalStorageAbuseStore({
+      getItem: (key) => memory.get(key) ?? null,
+      setItem: (key, value) => { memory.set(key, value); },
+    }));
+    await expect(second.save('# Second')).resolves.toEqual({ kind: 'rate-limited', limit: 'create' });
+  });
+
+  it('keeps the create quota across a new lifecycle that shares the abuse store', async () => {
+    const documents = memoryStore();
+    const abuse = createMemoryAbuseStore();
+    const limits = { create: { max: 1, windowMs: 60 * 60 * 1000 }, upload: { max: 1, windowMs: 60 * 60 * 1000 } };
+    const first = createDocumentLifecycle(documents, () => 'first-id', () => new Date('2026-08-13T12:00:00Z'), undefined, limits, abuse);
+    await expect(first.save('# First')).resolves.toMatchObject({ kind: 'published' });
+
+    const second = createDocumentLifecycle(documents, () => 'second-id', () => new Date('2026-08-13T12:00:00Z'), undefined, limits, abuse);
+    await expect(second.save('# Second')).resolves.toEqual({ kind: 'rate-limited', limit: 'create' });
+    expect(documents.documents.size).toBe(1);
+  });
+
+  it('does not consume quota when validation or persistence fails', async () => {
+    const limits = { create: { max: 1, windowMs: 60 * 60 * 1000 }, upload: { max: 1, windowMs: 60 * 60 * 1000 } };
+    const abuse = createMemoryAbuseStore();
+    const store = memoryStore();
+    let persist: 'fail' | 'ok' = 'fail';
+    const persistence: DocumentPersistence = {
+      ...store,
+      async save(document) {
+        if (persist === 'fail') throw new Error('persist failed');
+        return store.save(document);
+      },
+    };
+    const ids = ['fail-id', 'fail-edit', 'ok-id', 'ok-edit', 'blocked-id', 'blocked-edit'];
+    const lifecycle = createDocumentLifecycle(persistence, () => ids.shift()!, () => new Date('2026-08-13T12:00:00Z'), undefined, limits, abuse);
+
+    await expect(lifecycle.save('# Notes')).resolves.toEqual({ kind: 'failed' });
+    persist = 'ok';
+    await expect(lifecycle.save('# Notes')).resolves.toMatchObject({ kind: 'published' });
+    await expect(lifecycle.save('# Blocked')).resolves.toEqual({ kind: 'rate-limited', limit: 'create' });
+
+    const uploads = createDocumentLifecycle(memoryStore(), () => 'doc-id', () => new Date('2026-08-13T12:00:00Z'), undefined, limits);
+    const oversized = { id: 'huge', file: new File([new Uint8Array(8)], 'huge.png', { type: 'image/png' }) };
+    Object.defineProperty(oversized.file, 'size', { value: 5 * 1024 * 1024 + 1 });
+    await expect(uploads.save('# Huge', undefined, { images: [oversized] })).resolves.toEqual({ kind: 'failed' });
+    await expect(uploads.save('# Ok', undefined, {
+      images: [{ id: 'ok', file: new File(['x'], 'ok.png', { type: 'image/png' }) }],
+    })).resolves.toMatchObject({ kind: 'published' });
   });
 
   it('translates a persistence failure to a generic publish failure', async () => {

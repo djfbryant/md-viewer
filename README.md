@@ -37,6 +37,8 @@ Import this repository in Vercel (or run `npx vercel`). Set `VITE_INSTANT_APP_ID
 
 The application uses self-hosted Inter assets from `@fontsource/inter`; it makes no Google Fonts request.
 
+Share Links, Edit Links, unknown paths, and `/new` send `X-Robots-Tag: noindex, nofollow, noarchive` and `Referrer-Policy: no-referrer`. Home, About, Privacy, and Acceptable use are indexable. `robots.txt` disallows `/s/`, `/e/`, and `/new`. Link previews stay on the generic MarkShare title and description. The editor rate-limits new documents to 20 per hour and image uploads to 60 per hour in that browser. Reloading does not reset the budget. Vercel challenges `/new` requests that omit `Accept-Language`.
+
 Expired and deleted documents stay unavailable immediately. A daily Vercel cron at `/api/cleanup` then removes those records and any owned images. Set these server-only variables in Vercel (and `.env.local` if you invoke the route locally):
 
 ```

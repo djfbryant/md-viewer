@@ -163,7 +163,12 @@ describe('basic anonymous documents', () => {
     expect(screen.getByRole('heading', { name: 'Release notes' })).toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: /markdown document/i })).not.toBeInTheDocument();
     expect(document.querySelector('.reader-content article')?.innerHTML).toBe(previewMarkup);
-    expect(document.title).toBe('Release notes · MarkShare');
+    expect(document.title).toBe('MarkShare');
+    expect(document.querySelector('meta[name="robots"]')).toHaveAttribute('content', 'noindex, nofollow, noarchive');
+    expect(document.querySelector('meta[name="referrer"]')).toHaveAttribute('content', 'no-referrer');
+    expect(document.querySelector('meta[property="og:title"]')).toHaveAttribute('content', 'MarkShare');
+    expect(document.querySelector('meta[property="og:description"]')).toHaveAttribute('content', 'A calm, private place to share Markdown.');
+    expect(document.querySelector('meta[property="og:title"]')?.getAttribute('content')).not.toContain('Release notes');
 
     const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:markdown-source');
     const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
@@ -188,6 +193,8 @@ describe('basic anonymous documents', () => {
 
     expect(screen.getByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();
     expect(document.title).toBe('MarkShare');
+    expect(document.querySelector('meta[name="robots"]')).toHaveAttribute('content', 'noindex, nofollow, noarchive');
+    expect(document.querySelector('meta[name="referrer"]')).toHaveAttribute('content', 'no-referrer');
     expect(screen.queryByText('Hello reader')).not.toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: /markdown document/i })).not.toBeInTheDocument();
   });

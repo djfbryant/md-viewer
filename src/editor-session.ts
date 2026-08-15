@@ -219,6 +219,10 @@ export function useEditorSession(
         if (!capability) persistRecovery(null, emptyRecovery);
       } else if (outcome.kind === 'not-configured') {
         setSaveError('Saving needs an InstantDB app. Add VITE_INSTANT_APP_ID to save this document.');
+      } else if (outcome.kind === 'rate-limited') {
+        setSaveError(outcome.limit === 'create'
+          ? 'This browser has created too many documents in the last hour. Please try again later.'
+          : 'This browser has uploaded too many images in the last hour. Please try again later.');
       } else {
         setSaveError('We could not save this document. Please try again.');
       }

@@ -52,6 +52,46 @@ export function recognizeRoute(pathname: string): Route {
   return { kind: 'unavailable' };
 }
 
+export const PUBLIC_PREVIEW_TITLE = 'MarkShare';
+export const PUBLIC_PREVIEW_DESCRIPTION = 'A calm, private place to share Markdown.';
+export const REFERRER_POLICY = 'no-referrer';
+export const PRIVATE_ROBOTS = 'noindex, nofollow, noarchive';
+export const PUBLIC_ROBOTS = 'index, follow';
+
+export type RoutePrivacy = {
+  pageTitle: string;
+  robots: string;
+  referrer: string;
+  previewTitle: string;
+  previewDescription: string;
+};
+
+function isPrivateRoute(route: Route) {
+  return route.kind === 'share' || route.kind === 'edit' || route.kind === 'editor' || route.kind === 'unavailable';
+}
+
+export function privacyFor(route: Route, infoTitles?: Record<InfoPage, string>): RoutePrivacy {
+  return {
+    pageTitle: route.kind === 'info' && infoTitles ? `${infoTitles[route.page]} · MarkShare` : PUBLIC_PREVIEW_TITLE,
+    robots: isPrivateRoute(route) ? PRIVATE_ROBOTS : PUBLIC_ROBOTS,
+    referrer: REFERRER_POLICY,
+    previewTitle: PUBLIC_PREVIEW_TITLE,
+    previewDescription: PUBLIC_PREVIEW_DESCRIPTION,
+  };
+}
+
+export function robotsTxt() {
+  return ['User-agent: *', 'Allow: /', 'Disallow: /s/', 'Disallow: /e/', 'Disallow: /new', ''].join('\n');
+}
+
+export function responseHeadersFor(pathname: string) {
+  const privacy = privacyFor(recognizeRoute(pathname));
+  return [
+    { key: 'X-Robots-Tag', value: privacy.robots },
+    { key: 'Referrer-Policy', value: privacy.referrer },
+  ];
+}
+
 export function sharePath(id: string) {
   return `${SHARE_PATH_PREFIX}${encodeURIComponent(id)}`;
 }

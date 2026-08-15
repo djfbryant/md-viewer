@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const documents = vi.hoisted(() => new Map<string, { id: string; editId: string; title: string; markdown: string }>());
-const publishDocument = vi.hoisted(() => vi.fn(async (markdown: string, existing?: { id: string; editId: string }): Promise<{ kind: 'published'; document: { id: string; editId: string; title: string; markdown: string } } | { kind: 'failed' }> => {
+const publishDocument = vi.hoisted(() => vi.fn(async (markdown: string, existing?: { id: string; editId: string }): Promise<{ kind: 'published'; document: { id: string; editId: string; title: string; markdown: string } } | { kind: 'failed' } | { kind: 'rate-limited'; limit: 'create' | 'upload' }> => {
   const document = { id: existing?.id ?? 'saved-document', editId: existing?.editId ?? 'private-edit-capability', title: 'Saved document', markdown };
   documents.set(document.id, document);
   return { kind: 'published' as const, document };
@@ -176,6 +176,16 @@ describe('editor session', () => {
 
     expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
     expect(publishDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('explains when creation is rate-limited and keeps the draft', async () => {
+    publishDocument.mockResolvedValueOnce({ kind: 'rate-limited', limit: 'create' });
+    render(<App />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Too many' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('This browser has created too many documents in the last hour. Please try again later.');
+    expect(screen.getByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Too many');
   });
 
   it('shows an import-specific error when a file cannot be read', async () => {

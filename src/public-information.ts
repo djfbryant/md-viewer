@@ -81,7 +81,19 @@ export const infoCopy: Record<InfoPage, InfoCopy> = {
       {
         heading: 'What we do not collect',
         paragraphs: [
-          'MarkShare does not run analytics in the app. It does not ask for an email address. InstantDB and Vercel still see the traffic any host sees, including IP addresses on requests.',
+          'MarkShare does not run analytics in the app. It does not ask for an email address. InstantDB and Vercel still see the traffic any host sees, including IP addresses on requests. Application logs record cleanup counts, not document titles or Markdown.',
+        ],
+      },
+      {
+        heading: 'Share links stay off the public web',
+        paragraphs: [
+          'Search engines are told not to index share links, edit links, or the editor. Link previews show the generic MarkShare name and description, never the document title or contents. Following a link in a document does not send the share URL along as a referrer.',
+        ],
+      },
+      {
+        heading: 'How we slow abuse',
+        paragraphs: [
+          'A browser can create 20 documents per hour and upload 60 images per hour. Reloading the page does not reset that budget. Vercel challenges /new requests that omit Accept-Language. These limits slow junk, they do not stop someone who already has a share link.',
         ],
       },
       {
@@ -107,7 +119,7 @@ export const infoCopy: Record<InfoPage, InfoCopy> = {
       {
         heading: 'Not fine',
         paragraphs: [
-          'Do not use MarkShare for illegal content, malware, or spam. Do not try to break the service, scrape it, or dump material you do not have the right to publish. Do not treat share links as a content-delivery network for bulk files.',
+          'Do not use MarkShare for illegal content, malware, or spam. Do not try to break the service, scrape it, or dump material you do not have the right to publish. Do not treat share links as a content-delivery network for bulk files. Automated bulk creation and image upload will be rate-limited.',
         ],
       },
       {

@@ -473,7 +473,9 @@ function MarkdownImage({ alt, src, ...props }: { alt?: string; src?: string } & 
 
 const markdownComponents: NonNullable<RehypeReactOptions['components']> = {
   a({ children, href, ...props }) {
-    return href ? <a href={href} {...props}>{children}</a> : <span>{children}</span>;
+    return href
+      ? <a href={href} {...props} rel="noreferrer" referrerPolicy="no-referrer">{children}</a>
+      : <span>{children}</span>;
   },
   img: MarkdownImage,
   pre({ children }) {
