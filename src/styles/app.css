@@ -134,6 +134,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .status-url { margin-left: auto; min-width: 0; max-width: 42ch; overflow: hidden; border: 0; padding: 0; background: transparent; color: inherit; font-family: var(--mono); text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .toast { position: fixed; bottom: 48px; left: 50%; z-index: 2; display: flex; align-items: center; gap: 7px; padding: 8px 13px; border-radius: 999px; background: var(--ink); color: var(--paper); box-shadow: var(--shadow); font-size: 12.5px; transform: translateX(-50%); }.toast-link, .toast-dismiss { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: var(--weight-semibold); text-decoration: underline; }.toast-dismiss { font-size: 16px; line-height: 1; text-decoration: none; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 3; display: grid; place-items: center; padding: 20px; background: rgb(20 18 14 / .42); }
+/* Only a toast raised by an action inside a dialog clears the backdrop. Ordinary toasts stay under it. */
+.toast--over-dialog { z-index: 4; }
 .dialog { width: min(520px, 100%); padding: 24px; border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
 .dialog h2 { margin: 0 0 8px; font-size: 1.35rem; }.dialog p { margin: 0 0 18px; color: var(--ink-soft); }.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .dialog-actions--split { justify-content: space-between; }
@@ -141,6 +143,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .dialog-help { margin: 0; }
 .dialog-row { display: flex; align-items: center; gap: 8px; }
 .dialog-row input[type='datetime-local'] { min-width: 0; flex: 1; padding: 7px 11px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--sunken); color: var(--ink); font: inherit; font-family: var(--mono); font-size: 12.5px; }
+.dialog-row .link-box { min-width: 0; flex: 1; }
 .link-box { display: block; width: 100%; overflow: hidden; padding: 9px 11px; border: 1px solid var(--line-soft); border-radius: var(--radius-control); background: var(--sunken); color: var(--ink); font-family: var(--mono); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
 .reader-expiry { color: var(--ink-faint); font-family: var(--mono); font-size: var(--type-small-size); }
 .reader-content { flex: 1; overflow: auto; padding: 56px 24px 120px; background: var(--surface); font-size: 16px; container-type: inline-size; }.reader-content .markdown { max-width: 66ch; }.reader-content .mermaid-diagram--wide { width: 100cqw; margin-left: calc((100% - 100cqw) / 2); }.reader-message { width: min(66ch, 100%); margin: auto; padding: 56px 24px; color: var(--ink-soft); }.reader-message h1 { color: var(--ink); }
