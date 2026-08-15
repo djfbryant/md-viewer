@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FocusEvent, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type MouseEvent } from 'react';
 import { formatExpiry, toDatetimeLocalValue } from './document';
 import { type SharedDocument } from './document-lifecycle';
 import { MAX_IMAGES_PER_DOCUMENT } from './document-image';
@@ -205,6 +205,7 @@ function Editor({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmRotate, setConfirmRotate] = useState(false);
   const [copyNotice, setCopyNotice] = useState<{ id: number; message: string } | null>(null);
+  const latestCopy = useRef(0);
   const remote = documentLifecycle.useEditDocument(editId ?? '');
   const existing = editId && remote.kind === 'available' ? remote.document : undefined;
   const session = useEditorSession(documentLifecycle, existing, editId);
@@ -225,10 +226,12 @@ function Editor({
   }, [onReplace, save]);
 
   const copyLink = useCallback((value: string, confirmation: string) => {
+    // Clipboard writes can settle out of order, so only the newest request may speak.
+    // The id also restarts the toast timer when the same link is copied twice.
+    const request = (latestCopy.current += 1);
     void copyToClipboard(value).then((copied) => {
-      const message = copied ? confirmation : 'Could not copy. Select the link and copy it.';
-      // A fresh id so a repeat copy restarts the toast instead of riding the old timer.
-      setCopyNotice((current) => ({ id: (current?.id ?? 0) + 1, message }));
+      if (latestCopy.current !== request) return;
+      setCopyNotice({ id: request, message: copied ? confirmation : 'Could not copy. Select the link and copy it.' });
     });
   }, []);
 
@@ -318,7 +321,7 @@ function Editor({
           ? <LinkBox className="status-url" label="Share URL" value={shareUrl(session.publishedId)} />
           : <span className="status-url">Save to create a share link</span>}
       </footer>
-      {copyNotice && <div className="toast" role="status">{copyNotice.message}</div>}
+      {copyNotice && <div className="toast toast--over-dialog" role="status">{copyNotice.message}</div>}
       {!copyNotice && session.recoveredDraft && <div className="toast" role="status">Recovered unsaved local draft.<button className="toast-dismiss" onClick={session.dismissRecoveredDraft} aria-label="Dismiss recovery message">×</button></div>}
       {session.saveError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="save-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissSaveError(); }}><h2 id="save-error-title">Document not saved</h2><p>{session.saveError}</p><button autoFocus className="button button--primary" onClick={session.dismissSaveError}>Done</button></section></div>}
       {session.importError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="import-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissImportError(); }}><h2 id="import-error-title">Markdown not imported</h2><p>{session.importError}</p><button autoFocus className="button button--primary" onClick={session.dismissImportError}>Done</button></section></div>}
