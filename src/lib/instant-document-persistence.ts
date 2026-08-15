@@ -1,6 +1,6 @@
 import { lookup } from '@instantdb/react';
 import { documentImagePath, documentImagePrefix, imageIdFromPath } from '../document-image';
-import { createDocumentLifecycle, type DocumentPersistence, type PersistedImage, type PersistedShareOutcome } from '../document-lifecycle';
+import { createDocumentLifecycle, createLocalStorageAbuseStore, type DocumentPersistence, type PersistedImage, type PersistedShareOutcome } from '../document-lifecycle';
 import { createDocumentId, db } from './instant';
 
 type InstantFile = { id: string; path?: string | null; url?: string | null };
@@ -128,4 +128,11 @@ const instantDocumentPersistence: DocumentPersistence = {
   },
 };
 
-export const documentLifecycle = createDocumentLifecycle(instantDocumentPersistence, createDocumentId);
+export const documentLifecycle = createDocumentLifecycle(
+  instantDocumentPersistence,
+  createDocumentId,
+  () => new Date(),
+  undefined,
+  undefined,
+  typeof localStorage === 'undefined' ? undefined : createLocalStorageAbuseStore(localStorage),
+);

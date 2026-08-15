@@ -93,7 +93,7 @@ export const infoCopy: Record<InfoPage, InfoCopy> = {
       {
         heading: 'How we slow abuse',
         paragraphs: [
-          'A browser can create 20 documents per hour and upload 60 images per hour in that session. Vercel challenges automated requests to the editor. These limits slow junk, they do not stop someone who already has a share link.',
+          'A browser can create 20 documents per hour and upload 60 images per hour. Reloading the page does not reset that budget. Vercel challenges /new requests that omit Accept-Language. These limits slow junk, they do not stop someone who already has a share link.',
         ],
       },
       {

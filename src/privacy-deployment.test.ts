@@ -75,6 +75,8 @@ describe('privacy and abuse deployment', () => {
     expect(privacy).toContain('does not run analytics');
     expect(privacy).toContain('never the document title or contents');
     expect(privacy).toContain('does not send the share URL along as a referrer');
+    expect(privacy).toContain('omit Accept-Language');
+    expect(privacy).toContain('does not reset that budget');
     expect(privacy).toContain('cleanup counts, not document titles or Markdown');
     expect(acceptableUse).toContain('rate-limited');
   });

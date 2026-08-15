@@ -48,6 +48,44 @@ export type AbuseLimits = {
   upload: { max: number; windowMs: number };
 };
 
+export type AbuseStore = {
+  load(key: string): number[];
+  save(key: string, values: number[]): void;
+};
+
+const ABUSE_CREATE_KEY = 'markshare-abuse-create-v1';
+const ABUSE_UPLOAD_KEY = 'markshare-abuse-upload-v1';
+
+export function createMemoryAbuseStore(): AbuseStore {
+  const data = new Map<string, number[]>();
+  return {
+    load: (key) => [...(data.get(key) ?? [])],
+    save: (key, values) => { data.set(key, [...values]); },
+  };
+}
+
+export function createLocalStorageAbuseStore(storage: Pick<Storage, 'getItem' | 'setItem'>): AbuseStore {
+  return {
+    load(key) {
+      try {
+        const parsed: unknown = JSON.parse(storage.getItem(key) ?? '[]');
+        return Array.isArray(parsed)
+          ? parsed.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+          : [];
+      } catch {
+        return [];
+      }
+    },
+    save(key, values) {
+      try {
+        storage.setItem(key, JSON.stringify(values));
+      } catch {
+        // Quota is a convenience. A blocked storage area must not prevent saving.
+      }
+    },
+  };
+}
+
 export type DeleteDocumentOutcome =
   | { kind: 'deleted' }
   | { kind: 'not-configured' }
@@ -164,9 +202,22 @@ export function createDocumentLifecycle(
   now: () => Date = () => new Date(),
   removal?: DocumentRemovalStore,
   abuseLimits: AbuseLimits = { create: CREATE_DOCUMENT_LIMIT, upload: UPLOAD_IMAGE_LIMIT },
+  abuseStore: AbuseStore = createMemoryAbuseStore(),
 ): DocumentLifecycle {
-  const createTimes: number[] = [];
-  const uploadTimes: number[] = [];
+  const recordPublishedAbuse = (existing: EditCapability | undefined, imageCount: number, at: number) => {
+    if (!existing) {
+      const createTimes = abuseStore.load(ABUSE_CREATE_KEY);
+      pruneWindow(createTimes, abuseLimits.create.windowMs, at);
+      recordAbuse(createTimes, at, 1);
+      abuseStore.save(ABUSE_CREATE_KEY, createTimes);
+    }
+    if (imageCount) {
+      const uploadTimes = abuseStore.load(ABUSE_UPLOAD_KEY);
+      pruneWindow(uploadTimes, abuseLimits.upload.windowMs, at);
+      recordAbuse(uploadTimes, at, imageCount);
+      abuseStore.save(ABUSE_UPLOAD_KEY, uploadTimes);
+    }
+  };
 
   return {
     attachImage(file, currentImageCount) {
@@ -175,14 +226,13 @@ export function createDocumentLifecycle(
     async save(markdown, existing, options) {
       const timestamp = now();
       const at = timestamp.getTime();
-      if (!existing && !hasAbuseCapacity(createTimes, abuseLimits.create, at, 1)) {
+      const imageCount = options?.images?.length ?? 0;
+      if (!existing && !hasAbuseCapacity(abuseStore.load(ABUSE_CREATE_KEY), abuseLimits.create, at, 1)) {
         return { kind: 'rate-limited', limit: 'create' };
       }
-      if (options?.images?.length && !hasAbuseCapacity(uploadTimes, abuseLimits.upload, at, options.images.length)) {
+      if (imageCount && !hasAbuseCapacity(abuseStore.load(ABUSE_UPLOAD_KEY), abuseLimits.upload, at, imageCount)) {
         return { kind: 'rate-limited', limit: 'upload' };
       }
-      if (!existing) recordAbuse(createTimes, at, 1);
-      if (options?.images?.length) recordAbuse(uploadTimes, at, options.images.length);
       const id = existing?.id ?? generateId();
       const interpreted = interpretMarkdown(markdown);
       const expiresAt = options && 'expiresAt' in options ? options.expiresAt : undefined;
@@ -230,6 +280,7 @@ export function createDocumentLifecycle(
           await discardUploaded();
           return { kind: 'not-configured' };
         }
+        recordPublishedAbuse(existing, imageCount, at);
         return {
           kind: 'published',
           document: {
