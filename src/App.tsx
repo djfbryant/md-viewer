@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FocusEvent, type MouseEvent } from 'react';
 import { formatExpiry, toDatetimeLocalValue } from './document';
 import { type SharedDocument } from './document-lifecycle';
 import { MAX_IMAGES_PER_DOCUMENT } from './document-image';
@@ -205,7 +205,6 @@ function Editor({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmRotate, setConfirmRotate] = useState(false);
   const [copyNotice, setCopyNotice] = useState<{ id: number; message: string } | null>(null);
-  const latestCopy = useRef(0);
   const remote = documentLifecycle.useEditDocument(editId ?? '');
   const existing = editId && remote.kind === 'available' ? remote.document : undefined;
   const session = useEditorSession(documentLifecycle, existing, editId);
@@ -226,12 +225,11 @@ function Editor({
   }, [onReplace, save]);
 
   const copyLink = useCallback((value: string, confirmation: string) => {
-    // Clipboard writes can settle out of order, so only the newest request may speak.
-    // The id also restarts the toast timer when the same link is copied twice.
-    const request = (latestCopy.current += 1);
     void copyToClipboard(value).then((copied) => {
-      if (latestCopy.current !== request) return;
-      setCopyNotice({ id: request, message: copied ? confirmation : 'Could not copy. Select the link and copy it.' });
+      const message = copied ? confirmation : 'Could not copy. Select the link and copy it.';
+      // The clipboard keeps whichever write finished last, so the last answer is the true
+      // one. A fresh id also restarts the toast when the same link is copied twice.
+      setCopyNotice((current) => ({ id: (current?.id ?? 0) + 1, message }));
     });
   }, []);
 

@@ -324,7 +324,9 @@ describe('basic anonymous documents', () => {
     expect(screen.getByRole('dialog', { name: 'Your document is live' })).toBeInTheDocument();
   });
 
-  it('lets the newest copy speak when an earlier clipboard write settles late', async () => {
+  it('names the link that reached the clipboard last when two copies overlap', async () => {
+    // The clipboard keeps the write that finishes last, so the confirmation must too —
+    // otherwise the author pastes the private edit link while the toast says share.
     let finishShareCopy: (() => void) | undefined;
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -347,8 +349,9 @@ describe('basic anonymous documents', () => {
     expect(await screen.findByText('Edit link copied — keep it private')).toBeInTheDocument();
 
     finishShareCopy?.();
-    await waitFor(() => expect(screen.getByText('Edit link copied — keep it private')).toBeInTheDocument());
-    expect(screen.queryByText('Share link copied')).not.toBeInTheDocument();
+
+    expect(await screen.findByText('Share link copied')).toBeInTheDocument();
+    expect(screen.queryByText('Edit link copied — keep it private')).not.toBeInTheDocument();
   });
 
   it('keeps the share dialog and its links usable when the clipboard refuses', async () => {
