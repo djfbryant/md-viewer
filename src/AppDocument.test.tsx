@@ -106,6 +106,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  Reflect.deleteProperty(navigator, 'clipboard');
 });
 
 describe('basic anonymous documents', () => {
@@ -285,6 +286,57 @@ describe('basic anonymous documents', () => {
     fireEvent.popState(window);
     expect(await screen.findByRole('heading', { name: 'Private notes' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Private revision' })).not.toBeInTheDocument();
+  });
+
+  it('copies the share link and the edit link in one gesture with distinct confirmations', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Shared notes' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    const savesBeforeCopying = vi.mocked(documentLifecycle.save).mock.calls.length;
+
+    const copyShare = screen.getByRole('button', { name: 'Copy share link' });
+    copyShare.focus();
+    expect(document.activeElement).toBe(copyShare);
+    fireEvent.click(copyShare);
+
+    expect(await screen.findByText('Share link copied')).toBeInTheDocument();
+    expect(writeText).toHaveBeenCalledExactlyOnceWith('http://localhost/s/opaque-document-id');
+    expect(screen.getByRole('dialog', { name: 'Your document is live' })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/e/private-edit-capability');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy edit link' }));
+
+    expect(await screen.findByText('Edit link copied — keep it private')).toBeInTheDocument();
+    expect(screen.queryByText('Share link copied')).not.toBeInTheDocument();
+    expect(writeText).toHaveBeenLastCalledWith('http://localhost/e/private-edit-capability');
+    expect(vi.mocked(documentLifecycle.save).mock.calls).toHaveLength(savesBeforeCopying);
+    expect(screen.getByRole('dialog', { name: 'Your document is live' })).toBeInTheDocument();
+  });
+
+  it('keeps the share dialog and its links usable when the clipboard refuses', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn(async () => { throw new Error('permission denied'); }) },
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Shared notes' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByText('Changes saved.');
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy share link' }));
+
+    expect(await screen.findByText('Could not copy. Select the link and copy it.')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Your document is live' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Share link — read only' })).toHaveValue('http://localhost/s/opaque-document-id');
+    expect(screen.getByRole('textbox', { name: 'Edit link — private, keep it safe' })).toHaveValue('http://localhost/e/private-edit-capability');
   });
 
   it('restores edit access from the edit link and forgets a replaced link', async () => {

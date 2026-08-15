@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FocusEvent, type MouseE
 import { formatExpiry, toDatetimeLocalValue } from './document';
 import { type SharedDocument } from './document-lifecycle';
 import { MAX_IMAGES_PER_DOCUMENT } from './document-image';
+import { copyToClipboard } from './clipboard';
 import { MAX_SPLIT, MIN_SPLIT, recallEditAccess, useEditorSession, useEditorSplit } from './editor-session';
 import { documentLifecycle } from './lib/instant-document-persistence';
 import { downloadMarkdown, interpretMarkdown, MarkdownView, type InterpretedMarkdown, type MermaidExpandRequest } from './markdown';
@@ -77,6 +78,16 @@ function LinkBox({ label, value, className = 'link-box' }: { label: string; valu
       onFocus={selectValue}
       onClick={selectValue}
     />
+  );
+}
+
+/** A link the author can read in full or take in one gesture. CSS truncates the box, never the copied value. */
+function CopyableLink({ copyLabel, label, onCopy, value }: { copyLabel: string; label: string; onCopy: (value: string) => void; value: string }) {
+  return (
+    <div className="dialog-row">
+      <LinkBox label={label} value={value} />
+      <button className="button button--small" aria-label={copyLabel} onClick={() => onCopy(value)}>Copy</button>
+    </div>
   );
 }
 
@@ -193,6 +204,7 @@ function Editor({
   const [shareOpen, setShareOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmRotate, setConfirmRotate] = useState(false);
+  const [copyNotice, setCopyNotice] = useState<{ id: number; message: string } | null>(null);
   const remote = documentLifecycle.useEditDocument(editId ?? '');
   const existing = editId && remote.kind === 'available' ? remote.document : undefined;
   const session = useEditorSession(documentLifecycle, existing, editId);
@@ -211,6 +223,20 @@ function Editor({
     }
     return outcome;
   }, [onReplace, save]);
+
+  const copyLink = useCallback((value: string, confirmation: string) => {
+    void copyToClipboard(value).then((copied) => {
+      const message = copied ? confirmation : 'Could not copy. Select the link and copy it.';
+      // A fresh id so a repeat copy restarts the toast instead of riding the old timer.
+      setCopyNotice((current) => ({ id: (current?.id ?? 0) + 1, message }));
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!copyNotice) return;
+    const timeout = window.setTimeout(() => setCopyNotice(null), 1900);
+    return () => window.clearTimeout(timeout);
+  }, [copyNotice]);
 
   useEffect(() => {
     const saveWithShortcut = (event: KeyboardEvent) => {
@@ -292,24 +318,35 @@ function Editor({
           ? <LinkBox className="status-url" label="Share URL" value={shareUrl(session.publishedId)} />
           : <span className="status-url">Save to create a share link</span>}
       </footer>
-      {session.recoveredDraft && <div className="toast" role="status">Recovered unsaved local draft.<button className="toast-dismiss" onClick={session.dismissRecoveredDraft} aria-label="Dismiss recovery message">×</button></div>}
+      {copyNotice && <div className="toast" role="status">{copyNotice.message}</div>}
+      {!copyNotice && session.recoveredDraft && <div className="toast" role="status">Recovered unsaved local draft.<button className="toast-dismiss" onClick={session.dismissRecoveredDraft} aria-label="Dismiss recovery message">×</button></div>}
       {session.saveError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="save-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissSaveError(); }}><h2 id="save-error-title">Document not saved</h2><p>{session.saveError}</p><button autoFocus className="button button--primary" onClick={session.dismissSaveError}>Done</button></section></div>}
       {session.importError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="import-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissImportError(); }}><h2 id="import-error-title">Markdown not imported</h2><p>{session.importError}</p><button autoFocus className="button button--primary" onClick={session.dismissImportError}>Done</button></section></div>}
       {session.imageError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="image-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissImageError(); }}><h2 id="image-error-title">Image not added</h2><p>{session.imageError}</p><button autoFocus className="button button--primary" onClick={session.dismissImageError}>Done</button></section></div>}
       {session.deleteError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="delete-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissDeleteError(); }}><h2 id="delete-error-title">Document not deleted</h2><p>{session.deleteError}</p><button autoFocus className="button button--primary" onClick={session.dismissDeleteError}>Done</button></section></div>}
       {session.rotateError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="rotate-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissRotateError(); }}><h2 id="rotate-error-title">Edit link not replaced</h2><p>{session.rotateError}</p><button autoFocus className="button button--primary" onClick={session.dismissRotateError}>Done</button></section></div>}
-      {session.savedNotice && session.publishedId && <div className="toast" role="status">Changes saved. <button className="toast-link" onClick={() => onNavigate(sharePath(session.publishedId!))}>Open share link</button></div>}
+      {!copyNotice && session.savedNotice && session.publishedId && <div className="toast" role="status">Changes saved. <button className="toast-link" onClick={() => onNavigate(sharePath(session.publishedId!))}>Open share link</button></div>}
       {shareOpen && !confirmDelete && !confirmRotate && session.publishedId && session.publishedEditId && <div className="dialog-backdrop" role="presentation" onClick={() => { setShareOpen(false); setConfirmDelete(false); setConfirmRotate(false); }}>
         <section className="dialog" role="dialog" aria-labelledby="share-title" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === 'Escape') { setShareOpen(false); setConfirmDelete(false); setConfirmRotate(false); } }}>
           <h2 id="share-title">Your document is live</h2>
           <p>Anyone with the share link can read it. No one can change it.</p>
           <div className="dialog-field">
             <span className="label">Share link — read only</span>
-            <LinkBox label="Share link — read only" value={shareUrl(session.publishedId)} />
+            <CopyableLink
+              label="Share link — read only"
+              copyLabel="Copy share link"
+              value={shareUrl(session.publishedId)}
+              onCopy={(value) => copyLink(value, 'Share link copied')}
+            />
           </div>
           <div className="dialog-field">
             <span className="label">Edit link — private, keep it safe</span>
-            <LinkBox label="Edit link — private, keep it safe" value={editUrl(session.publishedEditId)} />
+            <CopyableLink
+              label="Edit link — private, keep it safe"
+              copyLabel="Copy edit link"
+              value={editUrl(session.publishedEditId)}
+              onCopy={(value) => copyLink(value, 'Edit link copied — keep it private')}
+            />
             <button className="button button--small" onClick={() => setConfirmRotate(true)}>Replace edit link</button>
           </div>
           <div className="dialog-field">
