@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { applyTheme, getStoredTheme, nextTheme, storeTheme, type ThemePreference } from './theme';
+import { applyTheme, darkSchemeQuery, getStoredTheme, nextTheme, storeTheme, type ThemePreference } from './theme';
 
 type ThemeControl = { preference: ThemePreference; cycle: () => void };
 
@@ -17,10 +17,10 @@ function useThemeControl(): ThemeControl {
  */
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [preference, setPreference] = useState<ThemePreference>(() => getStoredTheme());
-  const [systemIsDark, setSystemIsDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const [systemIsDark, setSystemIsDark] = useState(() => window.matchMedia(darkSchemeQuery).matches);
 
   useEffect(() => {
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const media = window.matchMedia(darkSchemeQuery);
     const followSystem = (event: MediaQueryListEvent) => setSystemIsDark(event.matches);
     media.addEventListener('change', followSystem);
     return () => media.removeEventListener('change', followSystem);
