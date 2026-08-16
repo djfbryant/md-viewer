@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { HtmlTagDescriptor, Plugin } from 'vite';
+import viteConfig from '../vite.config';
 import { applyTheme, getStoredTheme, themeBootScript } from './theme';
 
 const root = process.cwd();
@@ -8,7 +10,12 @@ const root = process.cwd();
 const storedPreferences: Array<string | null> = [null, 'system', 'light', 'dark', 'midnight'];
 
 function pretendSystemIsDark(systemIsDark: boolean) {
-  window.matchMedia = ((query: string) => ({ matches: systemIsDark, media: query })) as typeof window.matchMedia;
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches: systemIsDark,
+    media: query,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
 }
 
 /** Runs the boot script exactly as the browser would, before any React code has loaded. */
@@ -84,5 +91,18 @@ describe('theme before the first paint', () => {
 describe('the shipped HTML shell', () => {
   it('never hard-codes a theme for the browser to paint first', () => {
     expect(readFileSync(join(root, 'index.html'), 'utf8')).not.toMatch(/data-theme=/);
+  });
+
+  /**
+   * Without this the build could stop injecting the script and every other test here would still
+   * pass, while the shell shipped with no theme at all — worse than the flash it replaced.
+   */
+  it('carries the boot script ahead of everything the browser paints', () => {
+    const plugins = (viteConfig.plugins ?? []).flat(2) as Plugin[];
+    const boot = plugins.find((plugin) => plugin?.name === 'markshare-theme-boot');
+    const transform = boot?.transformIndexHtml as (() => HtmlTagDescriptor[]) | undefined;
+
+    expect(transform).toBeTypeOf('function');
+    expect(transform?.()).toEqual([{ tag: 'script', children: themeBootScript, injectTo: 'head-prepend' }]);
   });
 });
