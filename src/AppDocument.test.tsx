@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const documents = vi.hoisted(() => {
@@ -7,6 +7,8 @@ const documents = vi.hoisted(() => {
 });
 
 const imageSourceKind = vi.hoisted(() => ({ remote: false }));
+
+const shareQuery = vi.hoisted(() => ({ pending: false }));
 
 const mermaidApi = vi.hoisted(() => ({
   initialize: vi.fn(),
@@ -53,6 +55,7 @@ vi.mock('./lib/instant-document-persistence', async () => {
       return { kind: 'rotated', document: { id: document.id, editId: document.editId } };
     }),
     useShareDocument: (id: string) => {
+      if (shareQuery.pending) return { kind: 'loading' };
       const document = documents.find((candidate) => candidate.id === id && !candidate.deleted);
       if (!document) return { kind: 'unavailable' };
       if (document.expiresAt && document.expiresAt.getTime() <= Date.now()) return { kind: 'unavailable' };
@@ -98,6 +101,7 @@ beforeEach(() => {
   });
   documents.length = 0;
   imageSourceKind.remote = false;
+  shareQuery.pending = false;
   window.history.replaceState({}, '', '/');
   window.matchMedia = vi.fn().mockImplementation(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
 });
@@ -602,5 +606,167 @@ describe('basic anonymous documents', () => {
     expect(vi.mocked(documentLifecycle.save).mock.lastCall?.[2]).toEqual(expect.objectContaining({
       images: [expect.objectContaining({ id: 'pasted-image-1' })],
     }));
+  });
+});
+
+describe('share link appearance', () => {
+  const shareId = '52567466-9a13-483a-9e62-335adaf3ca72';
+
+  /** Puts the browser on a published share link the visitor did not author. */
+  const openShareLink = () => {
+    documents.push({
+      id: shareId,
+      editId: 'visitor-must-not-see-this',
+      title: 'Visitor notes',
+      markdown: '# Visitor notes\n\nPublished for a stranger.',
+    });
+    window.history.replaceState({}, '', `/s/${shareId}`);
+  };
+
+  const themeControl = () => screen.getByRole('button', { name: /^theme: /i });
+
+  /** A matchMedia the test can flip, so System can be watched while the OS changes. */
+  const stubSystemTheme = () => {
+    const listeners = new Set<(event: MediaQueryListEvent) => void>();
+    const state = { isDark: false };
+    window.matchMedia = vi.fn().mockImplementation(() => ({
+      get matches() { return state.isDark; },
+      addEventListener: (_: string, listener: (event: MediaQueryListEvent) => void) => { listeners.add(listener); },
+      removeEventListener: (_: string, listener: (event: MediaQueryListEvent) => void) => { listeners.delete(listener); },
+    }));
+    return (isDark: boolean) => {
+      state.isDark = isDark;
+      act(() => { listeners.forEach((listener) => listener({ matches: isDark } as MediaQueryListEvent)); });
+    };
+  };
+
+  it('starts a reader with no stored preference on System', () => {
+    openShareLink();
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: 'Visitor notes' })).toBeInTheDocument();
+    expect(themeControl()).toHaveAccessibleName('Theme: system. Change theme');
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(window.localStorage.getItem('markshare-theme')).toBeNull();
+  });
+
+  it('lets the reader cycle System, Light, and Dark and keeps the choice in that browser', () => {
+    openShareLink();
+    render(<App />);
+
+    fireEvent.click(themeControl());
+    expect(themeControl()).toHaveAccessibleName('Theme: light. Change theme');
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(window.localStorage.getItem('markshare-theme')).toBe('light');
+
+    fireEvent.click(themeControl());
+    expect(themeControl()).toHaveAccessibleName('Theme: dark. Change theme');
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(window.localStorage.getItem('markshare-theme')).toBe('dark');
+
+    fireEvent.click(themeControl());
+    expect(themeControl()).toHaveAccessibleName('Theme: system. Change theme');
+    expect(window.localStorage.getItem('markshare-theme')).toBe('system');
+
+    // The link stays a document link. Appearance never travels with it, in any part.
+    expect(window.location.pathname).toBe(`/s/${shareId}`);
+    expect(window.location.search).toBe('');
+    expect(window.location.hash).toBe('');
+    expect(window.location.href).not.toMatch(/theme|light|dark|system/i);
+  });
+
+  it('still shows the reader their choice on the next full page load', () => {
+    openShareLink();
+    const first = render(<App />);
+
+    fireEvent.click(themeControl());
+    fireEvent.click(themeControl());
+    expect(themeControl()).toHaveAccessibleName('Theme: dark. Change theme');
+
+    // A fresh mount is what a visitor gets when they open the link again.
+    first.unmount();
+    document.documentElement.removeAttribute('data-theme');
+    render(<App />);
+
+    expect(themeControl()).toHaveAccessibleName('Theme: dark. Change theme');
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(screen.getByRole('heading', { name: 'Visitor notes' })).toBeInTheDocument();
+  });
+
+  it('follows the OS while the reader stays on System, and stops once they choose', () => {
+    const setSystemDark = stubSystemTheme();
+    openShareLink();
+    render(<App />);
+
+    expect(document.documentElement.dataset.theme).toBe('light');
+    setSystemDark(true);
+    expect(document.documentElement.dataset.theme).toBe('dark');
+
+    // Light is a choice, not a guess. A later OS swing must not overrule it.
+    fireEvent.click(themeControl());
+    expect(themeControl()).toHaveAccessibleName('Theme: light. Change theme');
+    expect(document.documentElement.dataset.theme).toBe('light');
+    setSystemDark(false);
+    expect(document.documentElement.dataset.theme).toBe('light');
+    setSystemDark(true);
+    expect(document.documentElement.dataset.theme).toBe('light');
+  });
+
+  it('honours a preference the reader stored on an earlier share link', () => {
+    window.localStorage.setItem('markshare-theme', 'dark');
+    openShareLink();
+    render(<App />);
+
+    expect(themeControl()).toHaveAccessibleName('Theme: dark. Change theme');
+    expect(document.documentElement.dataset.theme).toBe('dark');
+  });
+
+  it('keeps the control on a loading share link', () => {
+    shareQuery.pending = true;
+    openShareLink();
+    render(<App />);
+
+    expect(screen.getByText('Opening document…')).toBeInTheDocument();
+    fireEvent.click(themeControl());
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(window.localStorage.getItem('markshare-theme')).toBe('light');
+  });
+
+  it('keeps the control on an unavailable share link', () => {
+    window.history.replaceState({}, '', '/s/not-a-document');
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();
+    fireEvent.click(themeControl());
+    expect(themeControl()).toHaveAccessibleName('Theme: light. Change theme');
+  });
+
+  it('keeps the control on an expired share link without offering an edit control', async () => {
+    documents.push({
+      id: shareId,
+      editId: 'visitor-must-not-see-this',
+      title: 'Expired notes',
+      markdown: '# Expired notes',
+      expiresAt: new Date('2020-01-01T00:00:00Z'),
+    });
+    window.history.replaceState({}, '', `/s/${shareId}`);
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();
+    fireEvent.click(themeControl());
+    expect(themeControl()).toHaveAccessibleName('Theme: light. Change theme');
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: /markdown document/i })).not.toBeInTheDocument();
+  });
+
+  it('does not let the theme control open an edit path on a live share link', () => {
+    openShareLink();
+    render(<App />);
+
+    fireEvent.click(themeControl());
+    expect(screen.getByText('Read only')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: /markdown document/i })).not.toBeInTheDocument();
+    expect(window.location.pathname).toBe(`/s/${shareId}`);
   });
 });

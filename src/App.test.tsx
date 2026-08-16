@@ -88,4 +88,16 @@ describe('MarkShare shell', () => {
     expect(window.localStorage.getItem('markshare-theme')).toBe('light');
     expect(document.documentElement.dataset.theme).toBe('light');
   });
+
+  it('keeps the theme control in the editor bar and carries the choice back to home', () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: /theme: system/i }));
+    expect(screen.getByRole('button', { name: /theme: light/i })).toBeInTheDocument();
+    expect(document.documentElement.dataset.theme).toBe('light');
+
+    fireEvent.click(screen.getByRole('button', { name: /back to markshare home/i }));
+    expect(screen.getByRole('button', { name: /theme: light/i })).toBeInTheDocument();
+  });
 });
