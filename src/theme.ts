@@ -30,16 +30,17 @@ export function storeTheme(preference: ThemePreference): void {
  * The first painted frame must already carry the resolved theme, or a dark visitor sees a flash of
  * light chrome on every cold load. This text runs as a blocking inline script ahead of React, so it
  * cannot import: the storage key, the preferences worth honouring, and the media query are all
- * interpolated from the constants above. theme-boot.test.ts then runs this exact text against
- * getStoredTheme plus resolveTheme for every preference on both kinds of system, so the answer it
- * paints cannot drift from the answer the app would have reached.
+ * interpolated from the constants above, and the ternary is resolveTheme written out.
+ * theme-boot.test.ts then runs this exact text against getStoredTheme plus resolveTheme for every
+ * preference on both kinds of system, so the answer it paints cannot drift from the answer the app
+ * would have reached.
  */
 export const themeBootScript = `(function () {
   try {
     var stored = window.localStorage.getItem(${JSON.stringify(storageKey)});
     var preference = ${JSON.stringify(themeOrder)}.indexOf(stored) >= 0 ? stored : 'system';
-    var dark = preference === 'system' ? window.matchMedia(${JSON.stringify(darkSchemeQuery)}).matches : preference === 'dark';
-    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    var theme = preference === 'system' ? (window.matchMedia(${JSON.stringify(darkSchemeQuery)}).matches ? 'dark' : 'light') : preference;
+    document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = document.documentElement.dataset.theme;
   } catch (error) {
     /* A browser that denies storage or media queries keeps the light default the stylesheet ships. */
