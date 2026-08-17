@@ -8,6 +8,7 @@ const schema = i.graph({
   $files: i.entity({
     path: i.string().unique().indexed(),
     url: i.string(),
+    expiresAt: i.date().optional(),
   }),
   documents: i.entity({
     title: i.string(),

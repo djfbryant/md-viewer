@@ -10,10 +10,11 @@ export type MemoryDocumentStore = DocumentPersistence & DocumentRemovalStore & {
   documents: Map<string, StoredDocument>;
   images: Map<string, string[]>;
   imageUrls: Map<string, string>;
+  imageExpiry: Map<string, Date>;
   /** While true every read answers `loading`, the way a live query does before it settles. */
   pending: boolean;
   addDocument(document: StoredDocument): void;
-  addImage(documentId: string, imageId: string, url?: string): void;
+  addImage(documentId: string, imageId: string, url?: string, expiresAt?: Date): void;
 };
 
 /**
@@ -27,7 +28,20 @@ export function createMemoryDocumentStore(
   const documents = new Map<string, StoredDocument>();
   const images = new Map<string, string[]>();
   const imageUrls = new Map<string, string>();
+  const imageExpiry = new Map<string, Date>();
   const state = { pending: false };
+
+  const imagesOf = (documentId: string) => (images.get(documentId) ?? []).map((id) => ({
+    id,
+    expiresAt: imageExpiry.get(id) ?? null,
+  }));
+
+  const forget = (imageIds: string[]) => {
+    for (const id of imageIds) {
+      imageUrls.delete(id);
+      imageExpiry.delete(id);
+    }
+  };
 
   const read = (document: StoredDocument | undefined) => {
     if (state.pending) return { kind: 'loading' as const };
@@ -38,7 +52,11 @@ export function createMemoryDocumentStore(
       markdown: document.markdown,
       expiresAt: document.expiresAt ?? null,
       deletedAt: document.deletedAt ?? null,
-      images: (images.get(document.id) ?? []).map((id) => ({ id, url: imageUrls.get(id) ?? imageUrl(id) })),
+      images: (images.get(document.id) ?? []).map((id) => ({
+        id,
+        url: imageUrls.get(id) ?? imageUrl(id),
+        expiresAt: imageExpiry.get(id) ?? null,
+      })),
     };
     return { kind: 'available' as const, document: persisted };
   };
@@ -47,32 +65,35 @@ export function createMemoryDocumentStore(
     documents,
     images,
     imageUrls,
+    imageExpiry,
     get pending() { return state.pending; },
     set pending(value: boolean) { state.pending = value; },
     addDocument(document) {
       documents.set(document.id, document);
     },
-    addImage(documentId, imageId, url) {
+    addImage(documentId, imageId, url, expiresAt) {
       images.set(documentId, [...(images.get(documentId) ?? []), imageId]);
       imageUrls.set(imageId, url ?? imageUrl(imageId));
+      if (expiresAt) imageExpiry.set(imageId, expiresAt);
     },
     async save(document) {
       documents.set(document.id, { ...documents.get(document.id), ...document });
       return 'published';
     },
-    async uploadImage(documentId, image) {
+    async uploadImage(documentId, image, _editId, expiresAt) {
       images.set(documentId, [...(images.get(documentId) ?? []), image.id]);
       imageUrls.set(image.id, imageUrl(image.id));
+      imageExpiry.set(image.id, expiresAt);
       return 'uploaded';
     },
     async removeImages(documentId, imageIds) {
       const remaining = (images.get(documentId) ?? []).filter((id) => !imageIds.includes(id));
       if (remaining.length) images.set(documentId, remaining);
       else images.delete(documentId);
-      for (const id of imageIds) imageUrls.delete(id);
+      forget(imageIds);
     },
-    async listImageIds(documentId) {
-      return images.get(documentId) ?? [];
+    async listImages(documentId) {
+      return imagesOf(documentId);
     },
     useShareDocument(id) {
       return read(documents.get(id));
@@ -97,11 +118,25 @@ export function createMemoryDocumentStore(
         id: document.id,
         expiresAt: document.expiresAt,
         deletedAt: document.deletedAt,
+        images: imagesOf(document.id),
         async remove() {
-          const imageCount = (images.get(document.id) ?? []).length;
+          const owned = images.get(document.id) ?? [];
           documents.delete(document.id);
           images.delete(document.id);
-          return imageCount;
+          forget(owned);
+          return owned.length;
+        },
+        async removeImages(imageIds, rewriteMarkdown) {
+          const remaining = (images.get(document.id) ?? []).filter((id) => !imageIds.includes(id));
+          if (remaining.length) images.set(document.id, remaining);
+          else images.delete(document.id);
+          forget(imageIds);
+          // Read the markdown held now, not the copy listed at the start of the run.
+          const stored = documents.get(document.id);
+          if (stored) documents.set(document.id, { ...stored, markdown: rewriteMarkdown(stored.markdown) });
+        },
+        async setImageExpiry(imageId, expiresAt) {
+          imageExpiry.set(imageId, expiresAt);
         },
       }));
     },

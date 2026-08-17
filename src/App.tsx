@@ -296,7 +296,7 @@ function Editor({
       </div>
       <footer className="status-footer">
         <span>{markdown.trim() ? `${markdown.trim().split(/\s+/).length} words` : 'Draft document'}</span>
-        <span>{imageCount}/{MAX_IMAGES_PER_DOCUMENT} images</span>
+        <span>{imageCount}/{MAX_IMAGES_PER_DOCUMENT} images · kept 7 days</span>
         <span>{formatExpiry(session.expiresAt)}</span>
         {session.publishedId
           ? <LinkBox className="status-url" label="Share URL" value={shareUrl(session.publishedId)} />
@@ -313,7 +313,7 @@ function Editor({
       {shareOpen && !confirmDelete && !confirmRotate && session.publishedId && session.publishedEditId && <div className="dialog-backdrop" role="presentation" onClick={() => { setShareOpen(false); setConfirmDelete(false); setConfirmRotate(false); }}>
         <section className="dialog" role="dialog" aria-labelledby="share-title" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === 'Escape') { setShareOpen(false); setConfirmDelete(false); setConfirmRotate(false); } }}>
           <h2 id="share-title">Your document is live</h2>
-          <p>Anyone with the share link can read it. No one can change it.</p>
+          <p>Anyone with the share link can read it. No one can change it. Pasted images are kept for 7 days, then become placeholder text.</p>
           <div className="dialog-field">
             <span className="label">Share link — read only</span>
             <CopyableLink

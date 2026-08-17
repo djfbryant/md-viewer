@@ -56,7 +56,7 @@ export const infoCopy: Record<InfoPage, InfoCopy> = {
       {
         heading: 'What is stored',
         paragraphs: [
-          'When you save, MarkShare keeps the Markdown, a title taken from the first heading, timestamps, any expiry you set, and any images you pasted. Images are PNG, JPEG, WebP, or GIF, up to 5 MB each, twenty per document. That data lives in InstantDB. The app is hosted on Vercel.',
+          'When you save, MarkShare keeps the Markdown, a title taken from the first heading, timestamps, any expiry you set, and any images you pasted. Images are PNG, JPEG, WebP, or GIF, up to 2 MB each, six per document. Pasted images are kept for 7 days and then become placeholder text in the document. The writing itself stays until you delete it or it reaches an expiry you chose. That data lives in InstantDB. The app is hosted on Vercel.',
         ],
       },
       {
@@ -75,7 +75,7 @@ export const infoCopy: Record<InfoPage, InfoCopy> = {
       {
         heading: 'How long it lasts',
         paragraphs: [
-          'A document stays until you delete it or it reaches an expiry you chose. Deleted and expired documents become unavailable immediately. A daily cleanup then removes the records and their images.',
+          'A document stays until you delete it or it reaches an expiry you chose. Pasted images are removed after 7 days; the Markdown stays and readers see placeholder text where the picture was. Deleted and expired documents become unavailable immediately. A daily cleanup then removes the records and any remaining images.',
         ],
       },
       {

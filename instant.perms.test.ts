@@ -15,7 +15,12 @@ describe('document permissions', () => {
   it('serves pasted images only to a requester who already knows the document ID', () => {
     expect(rules.$files.allow.view).toBe("data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/')");
     expect(rules.$files.allow.create).toBe('true');
-    expect(rules.$files.allow.update).toBe('false');
     expect(rules.$files.allow.delete).toBe("data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/') && ruleParams.editId != null");
+  });
+
+  it('lets retention be stamped on a pasted image under the same gate as deleting it', () => {
+    // Anything the retention write can reach, the delete rule could already reach.
+    expect(rules.$files.allow.update).toBe(rules.$files.allow.delete);
+    expect(rules.$files.allow.update).toContain('ruleParams.editId != null');
   });
 });

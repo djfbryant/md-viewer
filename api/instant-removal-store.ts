@@ -1,20 +1,28 @@
 import { init } from '@instantdb/admin';
-import { documentImagePrefix } from '../src/document-image';
-import type { DocumentRemovalStore, RemovableDocument } from '../src/document-lifecycle';
-import { instantAvailability, type InstantDate } from '../src/instant-wire';
+import { documentImagePrefix, imageIdFromPath } from '../src/document-image';
+import type { DocumentRemovalStore, RemovableDocument, StoredImage } from '../src/document-lifecycle';
+import { instantAvailability, toDate, type InstantDate } from '../src/instant-wire';
 
-// `$files.id` is an Instant storage id, not the image id the editor handed out. It is
-// captured with the document that owns it and never leaves this adapter.
-type InstantFile = { id: string; path?: string | null };
+// `$files.id` is an Instant storage id, not the image id the editor handed out. Each
+// document keeps its own map of the two, and neither the map nor the storage ids leave here.
+type InstantFile = { id: string; path?: string | null; expiresAt?: InstantDate | null };
 type InstantDocument = {
   id: string;
+  markdown: string;
   expiresAt?: InstantDate | null;
   deletedAt?: InstantDate | null;
 };
 
-function ownedFileIds(documentId: string, files: InstantFile[]) {
+export function ownedFiles(documentId: string, files: InstantFile[]) {
   const prefix = documentImagePrefix(documentId);
-  return files.filter((file) => file.path?.startsWith(prefix)).map((file) => file.id);
+  const owned = new Map<string, { fileId: string; expiresAt: Date | null }>();
+  for (const file of files) {
+    const imageId = imageIdFromPath(documentId, file.path ?? '');
+    if (imageId && file.path?.startsWith(prefix)) {
+      owned.set(imageId, { fileId: file.id, expiresAt: toDate(file.expiresAt) });
+    }
+  }
+  return owned;
 }
 
 export function createInstantRemovalStore(
@@ -33,16 +41,38 @@ export function createInstantRemovalStore(
       };
       const files = data.$files ?? [];
       return (data.documents ?? []).map((document) => {
-        const fileIds = ownedFileIds(document.id, files);
+        const owned = ownedFiles(document.id, files);
+        const images: StoredImage[] = [...owned].map(([id, file]) => ({ id, expiresAt: file.expiresAt }));
+        const fileIdsFor = (imageIds: string[]) => imageIds.flatMap((imageId) => {
+          const file = owned.get(imageId);
+          return file ? [file.fileId] : [];
+        });
+
         return {
           id: document.id,
           ...instantAvailability(document),
+          images,
           async remove() {
             await db.transact([
-              ...fileIds.map((fileId) => db.tx.$files[fileId].delete()),
+              ...[...owned.values()].map((file) => db.tx.$files[file.fileId].delete()),
               db.tx.documents[document.id].delete(),
             ]);
-            return fileIds.length;
+            return owned.size;
+          },
+          async removeImages(imageIds, rewriteMarkdown) {
+            // Re-read: this document may have been edited since the run started.
+            const current = await db.query({ documents: { $: { where: { id: document.id } } } }) as {
+              documents?: InstantDocument[];
+            };
+            await db.transact([
+              ...fileIdsFor(imageIds).map((fileId) => db.tx.$files[fileId].delete()),
+              db.tx.documents[document.id].update({ markdown: rewriteMarkdown(current.documents?.[0]?.markdown ?? '') }),
+            ]);
+          },
+          async setImageExpiry(imageId, expiresAt) {
+            const file = owned.get(imageId);
+            if (!file) return;
+            await db.transact(db.tx.$files[file.fileId].update({ expiresAt }));
           },
         };
       });

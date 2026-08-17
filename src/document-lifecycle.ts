@@ -1,4 +1,15 @@
-import { attachDocumentImage, isSupportedImageType, MAX_IMAGE_BYTES, MAX_IMAGES_PER_DOCUMENT, type AttachImageOutcome, type ImageInput } from './document-image';
+import {
+  attachDocumentImage,
+  imageExpiresAt,
+  isSupportedImageType,
+  liveDocumentImageCount,
+  MAX_IMAGE_BYTES,
+  MAX_IMAGES_PER_DOCUMENT,
+  referencedDocumentImageIds,
+  rewriteRemovedImageRefs,
+  type AttachImageOutcome,
+  type ImageInput,
+} from './document-image';
 import { interpretMarkdown } from './markdown';
 
 export type DocumentImageSources = Record<string, string>;
@@ -100,13 +111,27 @@ export type EditDocumentOutcome =
   | { kind: 'available'; document: EditableDocument };
 
 export type CleanupDocumentOutcome =
-  | { kind: 'cleaned'; removed: Array<{ documentId: string; imageCount: number }> }
+  | {
+      kind: 'cleaned';
+      removed: Array<{ documentId: string; imageCount: number }>;
+      expiredImages: Array<{ documentId: string; imageCount: number }>;
+    }
   | { kind: 'not-configured' }
   | { kind: 'failed' };
 
 export type PersistedImage = {
   id: string;
   url: string;
+  expiresAt?: Date | null;
+};
+
+/**
+ * An image record a store already holds, named by the id `attachImage` handed out.
+ * How the store keys its own file rows is its business and stays behind the seam.
+ */
+export type StoredImage = {
+  id: string;
+  expiresAt?: Date | null;
 };
 
 /** When a document stops being readable. The one rule a reader and cleanup must agree on. */
@@ -138,20 +163,31 @@ export type StoredDocument = DocumentAvailability & {
 };
 
 /**
- * A cleanup candidate that knows how to remove itself. The store that listed it already
+ * A cleanup candidate that knows how to act on itself. The store that listed it already
  * holds its image records, so neither the image ids nor their id space cross the seam.
  */
 export type RemovableDocument = DocumentAvailability & {
   id: string;
+  images: StoredImage[];
   /** Removes this document and every image it owns. Answers how many images went. */
   remove(): Promise<number>;
+  /**
+   * Removes the named images and rewrites the markdown that survives them. The rewrite is
+   * handed down rather than applied here so the store runs it on the markdown it holds now,
+   * not on a copy that went stale while cleanup worked through the rest of the list.
+   */
+  removeImages(imageIds: string[], rewriteMarkdown: (markdown: string) => string): Promise<void>;
+  /** Stamps a retention date on an image stored before images had one. */
+  setImageExpiry(imageId: string, expiresAt: Date): Promise<void>;
 };
 
 export interface DocumentPersistence {
   save(document: StoredDocument): Promise<'published' | 'not-configured'>;
-  uploadImage(documentId: string, image: PendingDocumentImage): Promise<'uploaded' | 'not-configured'>;
+  // The editId is back on upload: stamping retention on the stored file needs the document
+  // capability, so unlike before it is a parameter the store genuinely uses.
+  uploadImage(documentId: string, image: PendingDocumentImage, editId: string, expiresAt: Date): Promise<'uploaded' | 'not-configured'>;
   removeImages(documentId: string, imageIds: string[], editId: string): Promise<void>;
-  listImageIds(documentId: string): Promise<string[]>;
+  listImages(documentId: string): Promise<StoredImage[]>;
   // Reads are live and therefore hook-shaped. The query itself, its rule parameters, and
   // its wire types stay in the adapter; callers only ever see a PersistedShareOutcome.
   useShareDocument(id: string): PersistedShareOutcome;
@@ -177,6 +213,15 @@ export interface DocumentLifecycle {
 function isDocumentUnavailable(document: DocumentAvailability, at: Date): boolean {
   if (document.deletedAt) return true;
   return document.expiresAt != null && document.expiresAt.getTime() <= at.getTime();
+}
+
+/** An image outlives neither its own retention date nor the document that owns it. */
+export function isImageExpired(expiresAt: Date | null | undefined, at: Date): boolean {
+  return expiresAt != null && expiresAt.getTime() <= at.getTime();
+}
+
+function liveImageIds(images: StoredImage[], at: Date) {
+  return images.filter((image) => !isImageExpired(image.expiresAt, at)).map((image) => image.id);
 }
 
 function pruneWindow(times: number[], windowMs: number, at: number) {
@@ -222,21 +267,41 @@ export function createDocumentLifecycle(
     async save(markdown, existing, options) {
       const timestamp = now();
       const at = timestamp.getTime();
-      const imageCount = options?.images?.length ?? 0;
+      const storedImages = existing ? await persistence.listImages(existing.id) : [];
+      const live = new Set(liveImageIds(storedImages, timestamp));
+      const pending = new Set((options?.images ?? []).map((image) => image.id));
+
+      // A ref to an image that has aged out, or was never uploaded, cannot render. Replace
+      // it here so the document a reader opens never points at something that is gone.
+      const dead = [...referencedDocumentImageIds(markdown)].filter((id) => !live.has(id) && !pending.has(id));
+      const workingMarkdown = dead.length ? rewriteRemovedImageRefs(markdown, new Set(dead)) : markdown;
+
+      const referenced = referencedDocumentImageIds(workingMarkdown);
+      const unreferenced = storedImages.map((image) => image.id).filter((id) => !referenced.has(id));
+      const uploads = (options?.images ?? []).filter((image) => referenced.has(image.id) && !live.has(image.id));
+      const imageCount = uploads.length;
+
       if (!existing && !hasAbuseCapacity(abuseStore.load(ABUSE_CREATE_KEY), abuseLimits.create, at, 1)) {
         return { kind: 'rate-limited', limit: 'create' };
       }
       if (imageCount && !hasAbuseCapacity(abuseStore.load(ABUSE_UPLOAD_KEY), abuseLimits.upload, at, imageCount)) {
         return { kind: 'rate-limited', limit: 'upload' };
       }
+      if (uploads.some((image) => image.file.size > MAX_IMAGE_BYTES || !isSupportedImageType(image.file.type))) {
+        return { kind: 'failed' };
+      }
+      if (liveDocumentImageCount(workingMarkdown, live, uploads.map((image) => image.id)) > MAX_IMAGES_PER_DOCUMENT) {
+        return { kind: 'failed' };
+      }
+
       const id = existing?.id ?? generateId();
-      const interpreted = interpretMarkdown(markdown);
+      const interpreted = interpretMarkdown(workingMarkdown);
       const expiresAt = options && 'expiresAt' in options ? options.expiresAt : undefined;
       const document = {
         id,
         editId: existing?.editId ?? generateId(),
         title: interpreted.title,
-        markdown,
+        markdown: workingMarkdown,
         updatedAt: timestamp,
         ...(existing ? {} : { createdAt: timestamp }),
         ...(expiresAt !== undefined ? { expiresAt } : {}),
@@ -253,28 +318,25 @@ export function createDocumentLifecycle(
       };
 
       try {
-        if (options?.images?.length) {
-          if (options.images.some((image) => image.file.size > MAX_IMAGE_BYTES || !isSupportedImageType(image.file.type))) {
-            return { kind: 'failed' };
+        for (const image of uploads) {
+          const uploaded = await persistence.uploadImage(id, image, document.editId, imageExpiresAt(timestamp));
+          if (uploaded === 'not-configured') {
+            await discardUploaded();
+            return { kind: 'not-configured' };
           }
-          const storedIds = existing ? await persistence.listImageIds(existing.id) : [];
-          const stored = new Set(storedIds);
-          if (stored.size + options.images.filter((image) => !stored.has(image.id)).length > MAX_IMAGES_PER_DOCUMENT) {
-            return { kind: 'failed' };
-          }
-          for (const image of options.images) {
-            const uploaded = await persistence.uploadImage(id, image);
-            if (uploaded === 'not-configured') {
-              await discardUploaded();
-              return { kind: 'not-configured' };
-            }
-            uploadedIds.push(image.id);
-          }
+          uploadedIds.push(image.id);
         }
         const result = await persistence.save(document);
         if (result === 'not-configured') {
           await discardUploaded();
           return { kind: 'not-configured' };
+        }
+        if (unreferenced.length) {
+          try {
+            await persistence.removeImages(id, unreferenced, document.editId);
+          } catch {
+            // Leftover files are cleanup's work. The rewritten document already published.
+          }
         }
         recordPublishedAbuse(existing, imageCount, at);
         return {
@@ -331,7 +393,9 @@ function toShareOutcome(outcome: PersistedShareOutcome, at: Date): ShareDocument
   if (isDocumentUnavailable(outcome.document, at)) return { kind: 'unavailable' };
   const expiresAt = outcome.document.expiresAt;
   const imageSources = Object.fromEntries(
-    (outcome.document.images ?? []).filter((image) => image.url).map((image) => [image.id, image.url]),
+    (outcome.document.images ?? [])
+      .filter((image) => image.url && !isImageExpired(image.expiresAt, at))
+      .map((image) => [image.id, image.url]),
   );
   return {
     kind: 'available',
@@ -359,11 +423,35 @@ export function createDocumentCleanup(
     const at = now();
     try {
       const removed: Array<{ documentId: string; imageCount: number }> = [];
+      const expiredImages: Array<{ documentId: string; imageCount: number }> = [];
+
       for (const document of await removal.listDocuments()) {
-        if (!isDocumentUnavailable(document, at)) continue;
-        removed.push({ documentId: document.id, imageCount: await document.remove() });
+        // Images stored before retention existed have no date. Give them one from this run
+        // rather than treating a missing date as "never expires".
+        const images: StoredImage[] = [];
+        for (const image of document.images) {
+          if (image.expiresAt) {
+            images.push(image);
+            continue;
+          }
+          const expiresAt = imageExpiresAt(at);
+          await document.setImageExpiry(image.id, expiresAt);
+          images.push({ ...image, expiresAt });
+        }
+
+        if (isDocumentUnavailable(document, at)) {
+          removed.push({ documentId: document.id, imageCount: await document.remove() });
+          continue;
+        }
+
+        const due = images.filter((image) => isImageExpired(image.expiresAt, at)).map((image) => image.id);
+        if (!due.length) continue;
+
+        await document.removeImages(due, (markdown) => rewriteRemovedImageRefs(markdown, new Set(due)));
+        expiredImages.push({ documentId: document.id, imageCount: due.length });
       }
-      return { kind: 'cleaned', removed };
+
+      return { kind: 'cleaned', removed, expiredImages };
     } catch {
       return { kind: 'failed' };
     }
