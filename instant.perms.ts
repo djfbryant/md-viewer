@@ -21,7 +21,10 @@ const rules = {
       // create rule still denied anonymous uploads, so create stays open
       // while view and delete stay capability-gated.
       create: 'true',
-      update: 'false',
+      // Retention is written after upload, because uploadFile cannot carry attributes.
+      // Gated exactly like delete: a caller who could already destroy the file is the
+      // only one who can date it, so this adds no reach that delete did not have.
+      update: "data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/') && ruleParams.editId != null",
       delete: "data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/') && ruleParams.editId != null",
     },
   },
