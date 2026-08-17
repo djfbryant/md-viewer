@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { DocumentLifecycle, EditCapability, EditableDocument, SaveDocumentOutcome } from './document-lifecycle';
-import { MAX_IMAGES_PER_DOCUMENT, referencedDocumentImageIds } from './document-image';
+import { MAX_IMAGES_PER_DOCUMENT, IMAGE_TOO_LARGE_MESSAGE, imageTooManyMessage, liveDocumentImageCount, referencedDocumentImageIds } from './document-image';
 
 const RECOVERY_KEY = 'markshare-editor-recovery-v1';
 const ACCESS_KEY = 'markshare-edit-access-v1';
@@ -141,16 +141,29 @@ export function useEditorSession(
     ? { id: publishedId, editId: publishedEditId }
     : undefined;
   const referencedImageIds = useMemo(() => referencedDocumentImageIds(markdown), [markdown]);
-  const publishedImageCount = Object.keys(existing?.imageSources ?? {}).length;
-  const imageCount = publishedImageCount + pendingImages.filter((image) => (
-    referencedImageIds.has(image.id) && !existing?.imageSources?.[image.id]
-  )).length;
+  const storedImageIds = useMemo(() => Object.keys(existing?.imageSources ?? {}), [existing?.imageSources]);
+  const pendingReferencedIds = useMemo(
+    () => pendingImages.filter((image) => referencedImageIds.has(image.id) && !image.uploaded && image.file).map((image) => image.id),
+    [pendingImages, referencedImageIds],
+  );
+  const imageCount = liveDocumentImageCount(markdown, storedImageIds, pendingReferencedIds);
   // Stored sources win. Preview blobs stay until unmount or document switch so a
   // remote Instant URL can fetch without revoking the still-visible preview.
   const imageSources = useMemo(() => ({
     ...Object.fromEntries(pendingImages.map((image) => [image.id, image.previewUrl])),
     ...existing?.imageSources,
   }), [existing?.imageSources, pendingImages]);
+
+  useEffect(() => {
+    setPendingImages((current) => {
+      const next = current.filter((image) => referencedImageIds.has(image.id));
+      if (next.length === current.length) return current;
+      for (const image of current) {
+        if (!referencedImageIds.has(image.id)) URL.revokeObjectURL(image.previewUrl);
+      }
+      return next;
+    });
+  }, [referencedImageIds]);
 
   useEffect(() => {
     if (!existing) return;
@@ -291,8 +304,8 @@ export function useEditorSession(
       const outcome = lifecycle.attachImage(file, nextCount);
       if (outcome.kind !== 'attached') {
         setImageError(
-          outcome.kind === 'too-large' ? 'Each image must be 5 MB or smaller.'
-            : outcome.kind === 'too-many' ? `A document can include up to ${MAX_IMAGES_PER_DOCUMENT} images.`
+          outcome.kind === 'too-large' ? IMAGE_TOO_LARGE_MESSAGE
+            : outcome.kind === 'too-many' ? imageTooManyMessage()
               : 'MarkShare can paste PNG, JPEG, WebP, and GIF images.',
         );
         break;

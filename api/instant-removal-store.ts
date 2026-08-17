@@ -1,17 +1,21 @@
 import { init } from '@instantdb/admin';
-import { documentImagePrefix } from '../src/document-image';
+import { documentImagePrefix, imageIdFromPath } from '../src/document-image';
 import type { DocumentRemovalStore, InstantDate, RemovableDocument } from '../src/document-lifecycle';
 
-type InstantFile = { id: string; path?: string | null };
+type InstantFile = { id: string; path?: string | null; expiresAt?: InstantDate | null };
 type InstantDocument = {
   id: string;
+  markdown: string;
   expiresAt?: InstantDate | null;
   deletedAt?: InstantDate | null;
 };
 
-function ownedImageIds(documentId: string, files: InstantFile[]) {
+function ownedImages(documentId: string, files: InstantFile[]) {
   const prefix = documentImagePrefix(documentId);
-  return files.filter((file) => file.path?.startsWith(prefix)).map((file) => file.id);
+  return files.flatMap((file) => {
+    const imageId = imageIdFromPath(documentId, file.path ?? '');
+    return imageId && file.path?.startsWith(prefix) ? [{ id: imageId, expiresAt: file.expiresAt }] : [];
+  });
 }
 
 export function createInstantRemovalStore(
@@ -31,9 +35,10 @@ export function createInstantRemovalStore(
       const files = data.$files ?? [];
       return (data.documents ?? []).map((document) => ({
         id: document.id,
+        markdown: document.markdown,
         expiresAt: document.expiresAt,
         deletedAt: document.deletedAt,
-        imageIds: ownedImageIds(document.id, files),
+        images: ownedImages(document.id, files),
       }));
     },
     async removeDocumentAndImages(id, imageIds) {
@@ -41,6 +46,15 @@ export function createInstantRemovalStore(
         ...imageIds.map((imageId) => db.tx.$files[imageId].delete()),
         db.tx.documents[id].delete(),
       ]);
+    },
+    async removeImagesAndUpdateMarkdown(id, imageIds, markdown) {
+      await db.transact([
+        ...imageIds.map((imageId) => db.tx.$files[imageId].delete()),
+        db.tx.documents[id].update({ markdown }),
+      ]);
+    },
+    async backfillImageExpiry(imageId, expiresAt) {
+      await db.transact(db.tx.$files[imageId].update({ expiresAt }));
     },
   };
 }

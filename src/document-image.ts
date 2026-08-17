@@ -1,7 +1,18 @@
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-export const MAX_IMAGES_PER_DOCUMENT = 20;
+export const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+export const MAX_IMAGES_PER_DOCUMENT = 6;
+export const IMAGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const DOCUMENT_IMAGE_PATH_PREFIX = 'documents/';
 export const DOCUMENT_IMAGE_SCHEME = 'markshare-image';
+
+export const IMAGE_TOO_LARGE_MESSAGE = 'Each image must be 2 MB or smaller.';
+
+export function imageTooManyMessage() {
+  return `A document can include up to ${MAX_IMAGES_PER_DOCUMENT} images.`;
+}
+
+export function imageExpiresAt(uploadedAt: Date) {
+  return new Date(uploadedAt.getTime() + IMAGE_RETENTION_MS);
+}
 
 const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
@@ -54,6 +65,38 @@ export function referencedDocumentImageIds(markdown: string) {
     if (imageId) ids.add(imageId);
   }
   return ids;
+}
+
+export function removedImagePlaceholder(alt: string) {
+  const label = alt.replace(/\s+/g, ' ').trim() || 'image';
+  return `*[Removed image: ${label}]*`;
+}
+
+export function rewriteRemovedImageRefs(markdown: string, removedIds: Set<string>) {
+  if (!removedIds.size) return markdown;
+  return markdown.replace(
+    /!\[([^\]]*)\]\(([^)]*)\)/g,
+    (match, alt: string, insideParens: string) => {
+      const imageId = parseDocumentImageRef(markdownImageDestination(insideParens));
+      if (!imageId || !removedIds.has(imageId)) return match;
+      return removedImagePlaceholder(alt);
+    },
+  );
+}
+
+export function liveDocumentImageCount(
+  markdown: string,
+  storedImageIds: Iterable<string>,
+  pendingImageIds: Iterable<string> = [],
+) {
+  const referenced = referencedDocumentImageIds(markdown);
+  const stored = new Set(storedImageIds);
+  const pending = new Set(pendingImageIds);
+  let count = 0;
+  for (const id of referenced) {
+    if (stored.has(id) || pending.has(id)) count += 1;
+  }
+  return count;
 }
 
 export function isInstantStorageUrl(url: string) {

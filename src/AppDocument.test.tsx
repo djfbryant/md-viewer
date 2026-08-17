@@ -488,7 +488,7 @@ describe('basic anonymous documents', () => {
 
     expect(editor).toHaveValue('# Illustrated notes\n\n![sketch.png](markshare-image:pasted-image-1)\n');
     expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-preview');
-    expect(screen.getByText('1/20 images')).toBeInTheDocument();
+    expect(screen.getByText('1/6 images · kept 7 days')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
@@ -552,12 +552,12 @@ describe('basic anonymous documents', () => {
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     const oversized = new File([new Uint8Array(8)], 'huge.png', { type: 'image/png' });
-    Object.defineProperty(oversized, 'size', { value: 5 * 1024 * 1024 + 1 });
+    Object.defineProperty(oversized, 'size', { value: 2 * 1024 * 1024 + 1 });
     fireEvent.paste(screen.getByRole('textbox', { name: /markdown document/i }), {
       clipboardData: { files: [oversized] },
     });
 
-    expect(screen.getByRole('alertdialog')).toHaveTextContent('Each image must be 5 MB or smaller.');
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Each image must be 2 MB or smaller.');
     expect(screen.queryByRole('img', { name: 'huge.png' })).not.toBeInTheDocument();
   });
 
@@ -575,15 +575,36 @@ describe('basic anonymous documents', () => {
       },
     });
 
-    expect(screen.getByText('1/20 images')).toBeInTheDocument();
+    expect(screen.getByText('1/6 images · kept 7 days')).toBeInTheDocument();
     fireEvent.change(editor, { target: { value: '# Illustrated notes' } });
-    expect(screen.getByText('0/20 images')).toBeInTheDocument();
+    expect(screen.getByText('0/6 images · kept 7 days')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
     expect(vi.mocked(documentLifecycle.save).mock.lastCall?.[2]?.images).toBeUndefined();
   });
 
-  it('uploads a pasted image if its markdown ref is restored before save', async () => {
+  it('uploads a pasted image when the markdown ref is still present at save', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
+    const editor = screen.getByRole('textbox', { name: /markdown document/i }) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: '# Illustrated notes' } });
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    fireEvent.paste(editor, {
+      clipboardData: {
+        files: [new File([new Uint8Array([1, 2, 3])], 'sketch.png', { type: 'image/png' })],
+      },
+    });
+
+    expect(screen.getByText('1/6 images · kept 7 days')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
+    expect(vi.mocked(documentLifecycle.save).mock.lastCall?.[2]).toEqual(expect.objectContaining({
+      images: [expect.objectContaining({ id: 'pasted-image-1' })],
+    }));
+  });
+
+  it('drops a pending paste when its markdown ref is removed and does not upload on save', async () => {
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
@@ -598,14 +619,12 @@ describe('basic anonymous documents', () => {
 
     const withImage = editor.value;
     fireEvent.change(editor, { target: { value: '# Illustrated notes' } });
-    expect(screen.getByText('0/20 images')).toBeInTheDocument();
+    expect(screen.getByText('0/6 images · kept 7 days')).toBeInTheDocument();
     fireEvent.change(editor, { target: { value: withImage } });
-    expect(screen.getByText('1/20 images')).toBeInTheDocument();
+    expect(screen.getByText('0/6 images · kept 7 days')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
-    expect(vi.mocked(documentLifecycle.save).mock.lastCall?.[2]).toEqual(expect.objectContaining({
-      images: [expect.objectContaining({ id: 'pasted-image-1' })],
-    }));
+    expect(vi.mocked(documentLifecycle.save).mock.lastCall?.[2]?.images ?? []).toEqual([]);
   });
 });
 

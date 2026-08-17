@@ -26,12 +26,15 @@ export async function handleScheduledCleanup(
 
   const outcome = await cleanup();
   if (outcome.kind === 'cleaned') {
+    const documentImageCount = outcome.removed.reduce((total, item) => total + item.imageCount, 0);
+    const expiredImageCount = outcome.expiredImages.reduce((total, item) => total + item.imageCount, 0);
     return {
       status: 200,
       body: {
         kind: 'cleaned',
         documentsRemoved: outcome.removed.length,
-        imagesRemoved: outcome.removed.reduce((total, item) => total + item.imageCount, 0),
+        imagesRemoved: documentImageCount + expiredImageCount,
+        expiredImagesRemoved: expiredImageCount,
       },
     };
   }

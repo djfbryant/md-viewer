@@ -20,13 +20,14 @@ describe('scheduled cleanup transport', () => {
         { documentId: 'expired-id', imageCount: 2 },
         { documentId: 'deleted-id', imageCount: 0 },
       ],
+      expiredImages: [{ documentId: 'live-id', imageCount: 1 }],
     }));
 
     await expect(handleScheduledCleanup({
       headers: { get: (name) => name === 'authorization' ? 'Bearer cron-secret' : null },
     }, cleanup, 'cron-secret')).resolves.toEqual({
       status: 200,
-      body: { kind: 'cleaned', documentsRemoved: 2, imagesRemoved: 2 },
+      body: { kind: 'cleaned', documentsRemoved: 2, imagesRemoved: 3, expiredImagesRemoved: 1 },
     });
     expect(cleanup).toHaveBeenCalledOnce();
   });

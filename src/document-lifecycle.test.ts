@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { imageExpiresAt, MAX_IMAGE_BYTES } from './document-image';
 import {
   createDocumentLifecycle,
   createLocalStorageAbuseStore,
@@ -19,42 +20,54 @@ function memoryStore(): DocumentPersistence & DocumentRemovalStore & {
   documents: Map<string, StoredMemoryDocument>;
   images: Map<string, string[]>;
   imageUrls: Map<string, string>;
-  addImage(documentId: string, imageId: string, url?: string): void;
+  imageExpiry: Map<string, Date>;
+  addImage(documentId: string, imageId: string, url?: string, expiresAt?: Date): void;
 } {
   const documents = new Map<string, StoredMemoryDocument>();
   const images = new Map<string, string[]>();
   const imageUrls = new Map<string, string>();
+  const imageExpiry = new Map<string, Date>();
   const withImages = (document: StoredMemoryDocument) => ({
     ...document,
-    images: (images.get(document.id) ?? []).map((id) => ({ id, url: imageUrls.get(id) ?? `memory://${id}` })),
+    images: (images.get(document.id) ?? []).map((id) => ({
+      id,
+      url: imageUrls.get(id) ?? `memory://${id}`,
+      expiresAt: imageExpiry.get(id),
+    })),
   });
   return {
     documents,
     images,
     imageUrls,
-    addImage(documentId, imageId, url) {
+    imageExpiry,
+    addImage(documentId, imageId, url, expiresAt) {
       images.set(documentId, [...(images.get(documentId) ?? []), imageId]);
       imageUrls.set(imageId, url ?? `memory://${imageId}`);
+      if (expiresAt) imageExpiry.set(imageId, expiresAt);
     },
     async save(document) {
       documents.set(document.id, { ...documents.get(document.id), ...document });
       return 'published';
     },
-    async uploadImages(documentId, uploaded) {
+    async uploadImages(documentId, uploaded, _editId, uploadedAt) {
       for (const image of uploaded) {
         images.set(documentId, [...(images.get(documentId) ?? []), image.id]);
         imageUrls.set(image.id, `memory://${image.id}`);
+        imageExpiry.set(image.id, imageExpiresAt(uploadedAt));
       }
       return 'uploaded';
     },
-    async removeImages(documentId, imageIds) {
+    async removeImages(documentId, imageIds, _editId?) {
       const remaining = (images.get(documentId) ?? []).filter((id) => !imageIds.includes(id));
       if (remaining.length) images.set(documentId, remaining);
       else images.delete(documentId);
-      for (const id of imageIds) imageUrls.delete(id);
+      for (const id of imageIds) {
+        imageUrls.delete(id);
+        imageExpiry.delete(id);
+      }
     },
-    async listImageIds(documentId) {
-      return images.get(documentId) ?? [];
+    async listImages(documentId) {
+      return (images.get(documentId) ?? []).map((id) => ({ id, expiresAt: imageExpiry.get(id) }));
     },
     useShareDocument(id) {
       const document = documents.get(id);
@@ -79,14 +92,33 @@ function memoryStore(): DocumentPersistence & DocumentRemovalStore & {
     async listDocuments(): Promise<RemovableDocument[]> {
       return [...documents.values()].map((document) => ({
         id: document.id,
+        markdown: document.markdown,
         expiresAt: document.expiresAt,
         deletedAt: document.deletedAt,
-        imageIds: images.get(document.id) ?? [],
+        images: (images.get(document.id) ?? []).map((id) => ({ id, expiresAt: imageExpiry.get(id) })),
       }));
     },
-    async removeDocumentAndImages(id) {
+    async removeDocumentAndImages(id, imageIds) {
       documents.delete(id);
       images.delete(id);
+      for (const imageId of imageIds) {
+        imageUrls.delete(imageId);
+        imageExpiry.delete(imageId);
+      }
+    },
+    async removeImagesAndUpdateMarkdown(id, imageIds, markdown) {
+      const document = documents.get(id);
+      if (document) documents.set(id, { ...document, markdown });
+      const remaining = (images.get(id) ?? []).filter((imageId) => !imageIds.includes(imageId));
+      if (remaining.length) images.set(id, remaining);
+      else images.delete(id);
+      for (const imageId of imageIds) {
+        imageUrls.delete(imageId);
+        imageExpiry.delete(imageId);
+      }
+    },
+    async backfillImageExpiry(imageId, expiresAt) {
+      imageExpiry.set(imageId, expiresAt);
     },
   };
 }
@@ -141,8 +173,8 @@ describe('Document lifecycle', () => {
     });
     const published = await revision.save('# Keep');
     if (published.kind !== 'published') throw new Error('Expected save to succeed');
-    await expect(revision.save('# Keep', published.document, { images: [png('one'), png('two')] })).resolves.toMatchObject({ kind: 'published' });
-    await expect(revision.save('# Keep', published.document, { images: [png('three')] })).resolves.toEqual({ kind: 'rate-limited', limit: 'upload' });
+    await expect(revision.save('# Keep\n\n![one](markshare-image:one)\n\n![two](markshare-image:two)', published.document, { images: [png('one'), png('two')] })).resolves.toMatchObject({ kind: 'published' });
+    await expect(revision.save('# Keep\n\n![three](markshare-image:three)', published.document, { images: [png('three')] })).resolves.toEqual({ kind: 'rate-limited', limit: 'upload' });
     expect(store.images.get(published.document.id)).toHaveLength(2);
   });
 
@@ -212,9 +244,9 @@ describe('Document lifecycle', () => {
 
     const uploads = createDocumentLifecycle(memoryStore(), () => 'doc-id', () => new Date('2026-08-13T12:00:00Z'), undefined, limits);
     const oversized = { id: 'huge', file: new File([new Uint8Array(8)], 'huge.png', { type: 'image/png' }) };
-    Object.defineProperty(oversized.file, 'size', { value: 5 * 1024 * 1024 + 1 });
-    await expect(uploads.save('# Huge', undefined, { images: [oversized] })).resolves.toEqual({ kind: 'failed' });
-    await expect(uploads.save('# Ok', undefined, {
+    Object.defineProperty(oversized.file, 'size', { value: MAX_IMAGE_BYTES + 1 });
+    await expect(uploads.save('# Huge\n\n![huge](markshare-image:huge)', undefined, { images: [oversized] })).resolves.toEqual({ kind: 'failed' });
+    await expect(uploads.save('# Ok\n\n![ok](markshare-image:ok)', undefined, {
       images: [{ id: 'ok', file: new File(['x'], 'ok.png', { type: 'image/png' }) }],
     })).resolves.toMatchObject({ kind: 'published' });
   });
@@ -224,7 +256,7 @@ describe('Document lifecycle', () => {
       save: vi.fn().mockRejectedValue(new Error('network error')),
       uploadImages: vi.fn(),
       removeImages: vi.fn(),
-      listImageIds: vi.fn().mockResolvedValue([]),
+      listImages: vi.fn().mockResolvedValue([]),
       useShareDocument: () => unavailable,
       useEditDocument: () => unavailable,
       markDeleted: vi.fn(),
@@ -240,7 +272,7 @@ describe('Document lifecycle', () => {
       save: async () => 'not-configured',
       uploadImages: async () => 'not-configured',
       removeImages: async () => undefined,
-      listImageIds: async () => [],
+      listImages: async () => [],
       useShareDocument: () => unavailable,
       useEditDocument: () => unavailable,
       markDeleted: async () => 'not-configured',
@@ -356,6 +388,7 @@ describe('Document lifecycle', () => {
     await expect(lifecycle.cleanup()).resolves.toEqual({
       kind: 'cleaned',
       removed: [{ documentId: expired.document.id, imageCount: 2 }],
+      expiredImages: [],
     });
     expect(lifecycle.useShareDocument(kept.document.id)).toMatchObject({ kind: 'available', document: { id: kept.document.id } });
     expect(lifecycle.useShareDocument(expired.document.id)).toEqual(unavailable);
@@ -379,6 +412,7 @@ describe('Document lifecycle', () => {
     await expect(lifecycle.cleanup()).resolves.toEqual({
       kind: 'cleaned',
       removed: [{ documentId: published.document.id, imageCount: 1 }],
+      expiredImages: [],
     });
     expect(lifecycle.useShareDocument(published.document.id)).toEqual(unavailable);
     expect(store.documents.has(published.document.id)).toBe(false);
@@ -416,43 +450,50 @@ describe('Document lifecycle', () => {
     });
   });
 
-  it('rejects unsupported types, oversized files, and a twenty-first image', () => {
+  it('rejects unsupported types, oversized files, and a seventh image', () => {
     const lifecycle = createDocumentLifecycle(memoryStore(), () => 'image-id');
 
     expect(lifecycle.attachImage({ name: 'notes.pdf', type: 'application/pdf', size: 12 }, 0)).toEqual({ kind: 'unsupported' });
-    expect(lifecycle.attachImage({ name: 'huge.png', type: 'image/png', size: 5 * 1024 * 1024 + 1 }, 0)).toEqual({ kind: 'too-large' });
-    expect(lifecycle.attachImage({ name: 'ok.png', type: 'image/png', size: 12 }, 20)).toEqual({ kind: 'too-many' });
-    expect(lifecycle.attachImage({ name: 'ok.webp', type: 'image/webp', size: 5 * 1024 * 1024 }, 19)).toMatchObject({ kind: 'attached' });
+    expect(lifecycle.attachImage({ name: 'huge.png', type: 'image/png', size: MAX_IMAGE_BYTES + 1 }, 0)).toEqual({ kind: 'too-large' });
+    expect(lifecycle.attachImage({ name: 'ok.png', type: 'image/png', size: 12 }, 6)).toEqual({ kind: 'too-many' });
+    expect(lifecycle.attachImage({ name: 'ok.webp', type: 'image/webp', size: MAX_IMAGE_BYTES }, 5)).toMatchObject({ kind: 'attached' });
   });
 
   it('rejects publishing an image that exceeds the lifecycle limits', async () => {
     const lifecycle = createDocumentLifecycle(memoryStore(), () => 'opaque-document-id');
 
-    await expect(lifecycle.save('# Notes', undefined, {
-      images: [{ id: 'huge', file: new File([new Uint8Array(5 * 1024 * 1024 + 1)], 'huge.png', { type: 'image/png' }) }],
+    const huge = { id: 'huge', file: new File([new Uint8Array(8)], 'huge.png', { type: 'image/png' }) };
+    Object.defineProperty(huge.file, 'size', { value: MAX_IMAGE_BYTES + 1 });
+    await expect(lifecycle.save('# Notes\n\n![huge](markshare-image:huge)', undefined, {
+      images: [huge],
     })).resolves.toEqual({ kind: 'failed' });
-    await expect(lifecycle.save('# Notes', undefined, {
+    await expect(lifecycle.save('# Notes\n\n![pdf](markshare-image:pdf)', undefined, {
       images: [{ id: 'pdf', file: new File(['x'], 'notes.pdf', { type: 'application/pdf' }) }],
     })).resolves.toEqual({ kind: 'failed' });
   });
 
-  it('rejects a twenty-first image at save, including additions to an existing document', async () => {
+  it('rejects a seventh image at save, including additions to an existing document', async () => {
     const png = (id: string) => ({ id, file: new File(['x'], `${id}.png`, { type: 'image/png' }) });
     const store = memoryStore();
     const ids = ['opaque-document-id', 'private-edit-capability'];
     const lifecycle = createDocumentLifecycle(store, () => ids.shift()!);
 
-    await expect(lifecycle.save('# Notes', undefined, {
-      images: Array.from({ length: 21 }, (_, index) => png(`batch-${index}`)),
-    })).resolves.toEqual({ kind: 'failed' });
+    await expect(lifecycle.save(
+      Array.from({ length: 7 }, (_, index) => `![img-${index}](markshare-image:batch-${index})`).join('\n\n'),
+      undefined,
+      { images: Array.from({ length: 7 }, (_, index) => png(`batch-${index}`)) },
+    )).resolves.toEqual({ kind: 'failed' });
     expect(store.images.size).toBe(0);
 
-    const published = await lifecycle.save('# Notes', undefined, {
-      images: Array.from({ length: 20 }, (_, index) => png(`kept-${index}`)),
-    });
+    const published = await lifecycle.save(
+      Array.from({ length: 6 }, (_, index) => `![kept-${index}](markshare-image:kept-${index})`).join('\n\n'),
+      undefined,
+      { images: Array.from({ length: 6 }, (_, index) => png(`kept-${index}`)) },
+    );
     if (published.kind !== 'published') throw new Error('Expected save to succeed');
-    await expect(lifecycle.save('# Notes', published.document, { images: [png('extra')] })).resolves.toEqual({ kind: 'failed' });
-    expect(store.images.get(published.document.id)).toHaveLength(20);
+    const sixRefs = Array.from({ length: 6 }, (_, index) => `![kept-${index}](markshare-image:kept-${index})`).join('\n\n');
+    await expect(lifecycle.save(`${sixRefs}\n\n![extra](markshare-image:extra)`, published.document, { images: [png('extra')] })).resolves.toEqual({ kind: 'failed' });
+    expect(store.images.get(published.document.id)).toHaveLength(6);
   });
 
   it('fails save without publishing when image create is denied', async () => {
@@ -465,7 +506,7 @@ describe('Document lifecycle', () => {
     };
     const lifecycle = createDocumentLifecycle(persistence, () => 'opaque-document-id');
 
-    await expect(lifecycle.save('# Notes', undefined, {
+    await expect(lifecycle.save('# Notes\n\n![pasted-image](markshare-image:pasted-image)', undefined, {
       images: [{ id: 'pasted-image', file: new File(['x'], 'sketch.png', { type: 'image/png' }) }],
     })).resolves.toEqual({ kind: 'failed' });
     expect(store.documents.size).toBe(0);
@@ -494,15 +535,15 @@ describe('Document lifecycle', () => {
     let uploads = 0;
     const persistence: DocumentPersistence = {
       ...store,
-      uploadImages: async (documentId, uploaded, editId) => {
+      uploadImages: async (documentId, uploaded, editId, uploadedAt) => {
         uploads += 1;
         if (uploads === 2) throw new Error('upload failed');
-        return store.uploadImages(documentId, uploaded, editId);
+        return store.uploadImages(documentId, uploaded, editId, uploadedAt);
       },
     };
     const lifecycle = createDocumentLifecycle(persistence, () => 'opaque-document-id');
 
-    await expect(lifecycle.save('# Notes', undefined, {
+    await expect(lifecycle.save('# Notes\n\n![first-image](markshare-image:first-image)\n\n![second-image](markshare-image:second-image)', undefined, {
       images: [
         { id: 'first-image', file: new File(['x'], 'first.png', { type: 'image/png' }) },
         { id: 'second-image', file: new File(['x'], 'second.png', { type: 'image/png' }) },
@@ -590,5 +631,97 @@ describe('Document lifecycle', () => {
 
     expect(lifecycle.useEditDocument(published.document.editId)).toEqual(unavailable);
     expect(lifecycle.useShareDocument(published.document.id)).toEqual(unavailable);
+  });
+
+  it('deletes due image files while keeping an available document and rewrites stored markdown', async () => {
+    const uploadedAt = new Date('2026-08-13T12:00:00.000Z');
+    const dueAt = imageExpiresAt(uploadedAt);
+    let now = uploadedAt;
+    const store = memoryStore();
+    const ids = ['doc-id', 'edit-id'];
+    const lifecycle = createDocumentLifecycle(store, () => ids.shift()!, () => now, store);
+    const image = { id: 'sketch', file: new Blob(['png'], { type: 'image/png' }) };
+
+    const published = await lifecycle.save('# Notes\n\n![sketch.png](markshare-image:sketch)', undefined, { images: [image] });
+    if (published.kind !== 'published') throw new Error('Expected save to succeed');
+
+    now = new Date(dueAt.getTime() - 1);
+    expect(lifecycle.useShareDocument('doc-id')).toMatchObject({
+      kind: 'available',
+      document: { imageSources: { sketch: 'memory://sketch' } },
+    });
+
+    now = dueAt;
+    await expect(lifecycle.cleanup()).resolves.toEqual({
+      kind: 'cleaned',
+      removed: [],
+      expiredImages: [{ documentId: 'doc-id', imageCount: 1 }],
+    });
+    expect(store.images.has('doc-id')).toBe(false);
+    expect(store.documents.get('doc-id')?.markdown).toBe('# Notes\n\n*[Removed image: sketch.png]*');
+    expect(lifecycle.useShareDocument('doc-id')).toMatchObject({
+      kind: 'available',
+      document: { markdown: '# Notes\n\n*[Removed image: sketch.png]*' },
+    });
+    const shareOutcome = lifecycle.useShareDocument('doc-id');
+    expect(shareOutcome.kind === 'available' ? shareOutcome.document.imageSources : undefined).toBeUndefined();
+  });
+
+  it('backfills image expiry for existing files without a deadline', async () => {
+    const now = new Date('2026-08-13T12:00:00.000Z');
+    const store = memoryStore();
+    const lifecycle = createDocumentLifecycle(store, () => 'doc-id', () => now, store);
+    await lifecycle.save('# Notes\n\n![sketch.png](markshare-image:legacy)');
+    store.addImage('doc-id', 'legacy');
+    expect(store.imageExpiry.has('legacy')).toBe(false);
+
+    await expect(lifecycle.cleanup()).resolves.toMatchObject({ kind: 'cleaned', removed: [], expiredImages: [] });
+    expect(store.imageExpiry.get('legacy')).toEqual(imageExpiresAt(now));
+  });
+
+  it('rewrites dead refs on save, deletes unreferenced files, and reclaims image slots', async () => {
+    const uploadedAt = new Date('2026-08-13T12:00:00.000Z');
+    const dueAt = imageExpiresAt(uploadedAt);
+    let now = uploadedAt;
+    const store = memoryStore();
+    const ids = ['doc-id', 'edit-id'];
+    const lifecycle = createDocumentLifecycle(store, () => ids.shift()!, () => now, store);
+    const first = { id: 'gone', file: new Blob(['png'], { type: 'image/png' }) };
+    const second = { id: 'kept', file: new Blob(['png'], { type: 'image/png' }) };
+
+    const published = await lifecycle.save(
+      '# Notes\n\n![gone.png](markshare-image:gone)\n\n![kept.png](markshare-image:kept)',
+      undefined,
+      { images: [first, second] },
+    );
+    if (published.kind !== 'published') throw new Error('Expected save to succeed');
+    store.imageExpiry.set('kept', new Date(dueAt.getTime() + 60_000));
+
+    now = dueAt;
+    await lifecycle.cleanup();
+    expect(store.images.get('doc-id')).toEqual(['kept']);
+
+    const revised = await lifecycle.save('# Notes\n\n![kept.png](markshare-image:kept)', published.document);
+    if (revised.kind !== 'published') throw new Error('Expected save to succeed');
+    expect(revised.document.markdown).toBe('# Notes\n\n![kept.png](markshare-image:kept)');
+
+    const replacement = { id: 'fresh', file: new Blob(['png'], { type: 'image/png' }) };
+    const withNew = await lifecycle.save(
+      '# Notes\n\n![kept.png](markshare-image:kept)\n\n![fresh.png](markshare-image:fresh)',
+      revised.document,
+      { images: [replacement] },
+    );
+    if (withNew.kind !== 'published') throw new Error('Expected save to succeed');
+    expect(store.images.get('doc-id')).toEqual(['kept', 'fresh']);
+  });
+
+  it('does not upload pending images that are no longer referenced in the markdown', async () => {
+    const store = memoryStore();
+    const ids = ['doc-id', 'edit-id'];
+    const lifecycle = createDocumentLifecycle(store, () => ids.shift()!, () => new Date('2026-08-13T12:00:00Z'));
+    const image = { id: 'leftover', file: new File(['x'], 'leftover.png', { type: 'image/png' }) };
+
+    await expect(lifecycle.save('# Notes', undefined, { images: [image] })).resolves.toMatchObject({ kind: 'published' });
+    expect(store.images.size).toBe(0);
   });
 });

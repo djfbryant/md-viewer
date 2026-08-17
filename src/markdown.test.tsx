@@ -118,11 +118,17 @@ describe('Markdown interpretation', () => {
     expect(screen.getByRole('link', { name: 'Example' })).toHaveAttribute('referrerPolicy', 'no-referrer');
   });
 
+  it('renders removed-image placeholder sentences as text', () => {
+    render(<MarkdownView document={interpretMarkdown('*[Removed image: sketch.png]*')} />);
+    expect(screen.getByText('[Removed image: sketch.png]')).toBeInTheDocument();
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+  });
+
   it('renders document-scoped images only when capability-resolved sources are provided', () => {
     const source = '![Dashboard sketch](markshare-image:pasted-image)';
     const unresolved = render(<MarkdownView document={interpretMarkdown(source)} />);
     expect(unresolved.container.querySelector('img')).toBeNull();
-    expect(unresolved.getByText('Dashboard sketch')).toBeInTheDocument();
+    expect(unresolved.getByText('Removed image: Dashboard sketch')).toBeInTheDocument();
     expect(interpretMarkdown(source).download.content).toBe(source);
     unresolved.unmount();
 

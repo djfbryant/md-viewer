@@ -469,7 +469,11 @@ function MarkdownImage({ alt, src, ...props }: { alt?: string; src?: string } & 
   const imageSources = useContext(DocumentImageContext);
   const imageId = typeof src === 'string' ? parseDocumentImageRef(src) : undefined;
   const privateSrc = usePrivateImageSrc(imageId ? imageSources[imageId] : undefined, imageId);
-  if (imageId) return privateSrc ? <img alt={alt ?? ''} src={privateSrc} {...props} /> : <span>{alt}</span>;
+  if (imageId) {
+    if (privateSrc) return <img alt={alt ?? ''} src={privateSrc} {...props} />;
+    const label = alt?.replace(/\s+/g, ' ').trim() || 'image';
+    return <span className="removed-image">Removed image: {label}</span>;
+  }
   return src ? <img alt={alt ?? ''} src={src} {...props} /> : <span>{alt}</span>;
 }
 
