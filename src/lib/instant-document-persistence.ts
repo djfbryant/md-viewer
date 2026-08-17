@@ -1,15 +1,37 @@
 import { lookup } from '@instantdb/react';
-import { documentImagePath, documentImagePrefix, imageExpiresAt, imageIdFromPath } from '../document-image';
-import { createDocumentLifecycle, createLocalStorageAbuseStore, type DocumentPersistence, type PersistedImage, type PersistedShareOutcome, type RemovableImage } from '../document-lifecycle';
+import { documentImagePath, documentImagePrefix, imageIdFromPath } from '../document-image';
+import { createDocumentLifecycle, createLocalStorageAbuseStore, type DocumentPersistence, type PersistedDocument, type PersistedImage, type PersistedShareOutcome } from '../document-lifecycle';
+import { instantAvailability, toDate, type InstantDate } from '../instant-wire';
 import { createDocumentId, db } from './instant';
 
-type InstantFile = { id: string; path?: string | null; url?: string | null; expiresAt?: Date | string | number | null };
+type InstantFile = { id: string; path?: string | null; url?: string | null; expiresAt?: InstantDate | null };
+type InstantDocument = {
+  id: string;
+  title: string;
+  markdown: string;
+  expiresAt?: InstantDate | null;
+  deletedAt?: InstantDate | null;
+};
 
 function imagesFor(documentId: string, files: InstantFile[] | undefined): PersistedImage[] {
   return (files ?? []).flatMap((file) => {
     const id = imageIdFromPath(documentId, file.path ?? '');
-    return id && file.url ? [{ id, url: file.url, expiresAt: file.expiresAt }] : [];
+    return id && file.url ? [{ id, url: file.url, expiresAt: toDate(file.expiresAt) }] : [];
   });
+}
+
+/**
+ * Instant rows carry wire dates and the private editId. Only the document a reader is
+ * allowed to see crosses into the lifecycle, with dates already resolved.
+ */
+function persistedDocument(document: InstantDocument, files: InstantFile[] | undefined): PersistedDocument {
+  return {
+    id: document.id,
+    title: document.title,
+    markdown: document.markdown,
+    ...instantAvailability(document),
+    images: imagesFor(document.id, files),
+  };
 }
 
 const instantDocumentPersistence: DocumentPersistence = {
@@ -27,33 +49,21 @@ const instantDocumentPersistence: DocumentPersistence = {
     return 'published';
   },
 
-  async uploadImages(documentId, images, editId, uploadedAt) {
-    if (!db) return 'not-configured';
-    const uploaded: string[] = [];
-    const expiresAt = imageExpiresAt(uploadedAt);
-    try {
-      for (const image of images) {
-        const path = documentImagePath(documentId, image.id);
-        await db.storage.uploadFile(path, image.file, {
-          contentDisposition: 'inline',
-          contentType: image.file.type || 'application/octet-stream',
-        });
-        uploaded.push(image.id);
-        await db.transact(
-          db.tx.$files[lookup('path', path)]
-            .ruleParams({ knownDocumentId: documentId, editId })
-            .update({ expiresAt }),
-        );
-      }
-      return 'uploaded';
-    } catch (error) {
-      try {
-        await instantDocumentPersistence.removeImages(documentId, uploaded, editId);
-      } catch {
-        // Compensation is best-effort; document cleanup still removes leftovers.
-      }
-      throw error;
-    }
+  async uploadImage(documentId, image, editId, expiresAt) {
+    const database = db;
+    if (!database) return 'not-configured';
+    const path = documentImagePath(documentId, image.id);
+    await database.storage.uploadFile(path, image.file, {
+      contentDisposition: 'inline',
+      contentType: image.file.type || 'application/octet-stream',
+    });
+    // uploadFile cannot carry attributes, so retention is stamped in a second write.
+    await database.transact(
+      database.tx.$files[lookup('path', path)]
+        .ruleParams({ knownDocumentId: documentId, editId })
+        .update({ expiresAt }),
+    );
+    return 'uploaded';
   },
 
   async removeImages(documentId, imageIds, editId) {
@@ -66,13 +76,13 @@ const instantDocumentPersistence: DocumentPersistence = {
     )));
   },
 
-  async listImages(documentId): Promise<RemovableImage[]> {
+  async listImages(documentId) {
     if (!db) return [];
     const { data } = await db.queryOnce(
       { $files: { $: { where: { path: { $like: `${documentImagePrefix(documentId)}%` } } } } },
       { ruleParams: { knownDocumentId: documentId } },
     );
-    return imagesFor(documentId, data.$files).map(({ id, expiresAt }) => ({ id, fileId: id, expiresAt }));
+    return imagesFor(documentId, data.$files).map(({ id, expiresAt }) => ({ id, expiresAt }));
   },
 
   useShareDocument(id): PersistedShareOutcome {
@@ -90,7 +100,7 @@ const instantDocumentPersistence: DocumentPersistence = {
     const document = data?.documents[0];
     return error || !document
       ? { kind: 'unavailable' }
-      : { kind: 'available', document: { ...document, images: imagesFor(id, data.$files) } };
+      : { kind: 'available', document: persistedDocument(document, data.$files) };
   },
 
   useEditDocument(editId): PersistedShareOutcome {
@@ -112,7 +122,7 @@ const instantDocumentPersistence: DocumentPersistence = {
     if (documentQuery.isLoading || (document && filesQuery.isLoading)) return { kind: 'loading' };
     return documentQuery.error || !document
       ? { kind: 'unavailable' }
-      : { kind: 'available', document: { ...document, images: imagesFor(document.id, filesQuery.data?.$files) } };
+      : { kind: 'available', document: persistedDocument(document, filesQuery.data?.$files) };
   },
 
   async markDeleted(id, editId, deletedAt) {
@@ -139,7 +149,6 @@ export const documentLifecycle = createDocumentLifecycle(
   instantDocumentPersistence,
   createDocumentId,
   () => new Date(),
-  undefined,
   undefined,
   typeof localStorage === 'undefined' ? undefined : createLocalStorageAbuseStore(localStorage),
 );

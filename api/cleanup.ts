@@ -1,12 +1,9 @@
-import { cleanupDueDocuments } from '../src/document-lifecycle';
+import { createDocumentCleanup } from '../src/document-lifecycle';
 import { handleScheduledCleanup } from '../src/scheduled-cleanup';
 import { createInstantRemovalStore } from './instant-removal-store';
 
 export default async function handler(request: Request) {
-  const store = createInstantRemovalStore();
-  const result = await handleScheduledCleanup(
-    request,
-    () => store ? cleanupDueDocuments(store, new Date()) : Promise.resolve({ kind: 'not-configured' }),
-  );
+  const cleanup = createDocumentCleanup(createInstantRemovalStore());
+  const result = await handleScheduledCleanup(request, cleanup);
   return Response.json(result.body, { status: result.status });
 }

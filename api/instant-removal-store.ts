@@ -1,8 +1,11 @@
 import { init } from '@instantdb/admin';
-import { documentImagePrefix, imageIdFromPath, rewriteRemovedImageRefs } from '../src/document-image';
-import type { DocumentRemovalStore, InstantDate, RemovableDocument, RemovableImage } from '../src/document-lifecycle';
+import { documentImagePrefix, imageIdFromPath } from '../src/document-image';
+import type { DocumentRemovalStore, RemovableDocument, StoredImage } from '../src/document-lifecycle';
+import { instantAvailability, toDate, type InstantDate } from '../src/instant-wire';
 
-export type InstantOwnedFile = { id: string; path?: string | null; expiresAt?: InstantDate | null };
+// `$files.id` is an Instant storage id, not the image id the editor handed out. Each
+// document keeps its own map of the two, and neither the map nor the storage ids leave here.
+type InstantFile = { id: string; path?: string | null; expiresAt?: InstantDate | null };
 type InstantDocument = {
   id: string;
   markdown: string;
@@ -10,14 +13,16 @@ type InstantDocument = {
   deletedAt?: InstantDate | null;
 };
 
-export function ownedImages(documentId: string, files: InstantOwnedFile[]): RemovableImage[] {
+export function ownedFiles(documentId: string, files: InstantFile[]) {
   const prefix = documentImagePrefix(documentId);
-  return files.flatMap((file) => {
+  const owned = new Map<string, { fileId: string; expiresAt: Date | null }>();
+  for (const file of files) {
     const imageId = imageIdFromPath(documentId, file.path ?? '');
-    return imageId && file.path?.startsWith(prefix)
-      ? [{ id: imageId, fileId: file.id, expiresAt: file.expiresAt }]
-      : [];
-  });
+    if (imageId && file.path?.startsWith(prefix)) {
+      owned.set(imageId, { fileId: file.id, expiresAt: toDate(file.expiresAt) });
+    }
+  }
+  return owned;
 }
 
 export function createInstantRemovalStore(
@@ -32,38 +37,45 @@ export function createInstantRemovalStore(
     async listDocuments(): Promise<RemovableDocument[]> {
       const data = await db.query({ documents: {}, $files: {} }) as {
         documents?: InstantDocument[];
-        $files?: InstantOwnedFile[];
+        $files?: InstantFile[];
       };
       const files = data.$files ?? [];
-      return (data.documents ?? []).map((document) => ({
-        id: document.id,
-        markdown: document.markdown,
-        expiresAt: document.expiresAt,
-        deletedAt: document.deletedAt,
-        images: ownedImages(document.id, files),
-      }));
-    },
-    async removeDocumentAndImages(id, images) {
-      await db.transact([
-        ...images.map((image) => db.tx.$files[image.fileId].delete()),
-        db.tx.documents[id].delete(),
-      ]);
-    },
-    async removeImagesAndUpdateMarkdown(id, images) {
-      const data = await db.query({ documents: { $: { where: { id } } } }) as {
-        documents?: InstantDocument[];
-      };
-      const rewritten = rewriteRemovedImageRefs(
-        data.documents?.[0]?.markdown ?? '',
-        new Set(images.map((image) => image.id)),
-      );
-      await db.transact([
-        ...images.map((image) => db.tx.$files[image.fileId].delete()),
-        db.tx.documents[id].update({ markdown: rewritten }),
-      ]);
-    },
-    async backfillImageExpiry(image, expiresAt) {
-      await db.transact(db.tx.$files[image.fileId].update({ expiresAt }));
+      return (data.documents ?? []).map((document) => {
+        const owned = ownedFiles(document.id, files);
+        const images: StoredImage[] = [...owned].map(([id, file]) => ({ id, expiresAt: file.expiresAt }));
+        const fileIdsFor = (imageIds: string[]) => imageIds.flatMap((imageId) => {
+          const file = owned.get(imageId);
+          return file ? [file.fileId] : [];
+        });
+
+        return {
+          id: document.id,
+          ...instantAvailability(document),
+          images,
+          async remove() {
+            await db.transact([
+              ...[...owned.values()].map((file) => db.tx.$files[file.fileId].delete()),
+              db.tx.documents[document.id].delete(),
+            ]);
+            return owned.size;
+          },
+          async removeImages(imageIds, rewriteMarkdown) {
+            // Re-read: this document may have been edited since the run started.
+            const current = await db.query({ documents: { $: { where: { id: document.id } } } }) as {
+              documents?: InstantDocument[];
+            };
+            await db.transact([
+              ...fileIdsFor(imageIds).map((fileId) => db.tx.$files[fileId].delete()),
+              db.tx.documents[document.id].update({ markdown: rewriteMarkdown(current.documents?.[0]?.markdown ?? '') }),
+            ]);
+          },
+          async setImageExpiry(imageId, expiresAt) {
+            const file = owned.get(imageId);
+            if (!file) return;
+            await db.transact(db.tx.$files[file.fileId].update({ expiresAt }));
+          },
+        };
+      });
     },
   };
 }
