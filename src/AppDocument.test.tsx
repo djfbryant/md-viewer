@@ -50,6 +50,9 @@ const givenDocument = (document: { id: string; editId: string; title: string; ma
 
 const queueIds = (...ids: string[]) => { nextIds.queue = ids; };
 
+/** Pasting one image asks for an id before Save asks for the document and edit ids. */
+const queuePastedImageThenSave = () => queueIds('pasted-image-1', 'opaque-document-id', 'private-edit-capability');
+
 beforeEach(() => {
   const values = new Map<string, string>();
   Object.defineProperty(window, 'localStorage', {
@@ -439,7 +442,7 @@ describe('basic anonymous documents', () => {
   });
 
   it('pastes a private image into the editor and renders it on the share link', async () => {
-    queueIds('pasted-image-1', 'opaque-document-id', 'private-edit-capability');
+    queuePastedImageThenSave();
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
     const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
     render(<App />);
@@ -472,7 +475,7 @@ describe('basic anonymous documents', () => {
 
   it('keeps the pasted preview visible until a stored Instant image can be fetched', async () => {
     imageSourceKind.remote = true;
-    queueIds('pasted-image-1', 'opaque-document-id', 'private-edit-capability');
+    queuePastedImageThenSave();
     vi.spyOn(URL, 'createObjectURL')
       .mockReturnValueOnce('blob:pasted-preview')
       .mockReturnValue('blob:resolved-stored-image');
@@ -533,7 +536,7 @@ describe('basic anonymous documents', () => {
   });
 
   it('omits a leftover pasted image from save when its markdown ref is removed', async () => {
-    queueIds('pasted-image-1', 'opaque-document-id', 'private-edit-capability');
+    queuePastedImageThenSave();
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
     render(<App />);
@@ -556,7 +559,7 @@ describe('basic anonymous documents', () => {
   });
 
   it('uploads a pasted image if its markdown ref is restored before save', async () => {
-    queueIds('pasted-image-1', 'opaque-document-id', 'private-edit-capability');
+    queuePastedImageThenSave();
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));

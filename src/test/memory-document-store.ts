@@ -97,13 +97,13 @@ export function createMemoryDocumentStore(
         id: document.id,
         expiresAt: document.expiresAt,
         deletedAt: document.deletedAt,
+        async remove() {
+          const imageCount = (images.get(document.id) ?? []).length;
+          documents.delete(document.id);
+          images.delete(document.id);
+          return imageCount;
+        },
       }));
-    },
-    async removeDocumentAndImages(id) {
-      const imageCount = (images.get(id) ?? []).length;
-      documents.delete(id);
-      images.delete(id);
-      return imageCount;
     },
   };
 }

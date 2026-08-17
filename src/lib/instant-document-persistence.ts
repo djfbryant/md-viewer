@@ -1,7 +1,7 @@
 import { lookup } from '@instantdb/react';
 import { documentImagePath, documentImagePrefix, imageIdFromPath } from '../document-image';
 import { createDocumentLifecycle, createLocalStorageAbuseStore, type DocumentPersistence, type PersistedDocument, type PersistedImage, type PersistedShareOutcome } from '../document-lifecycle';
-import { toDate, type InstantDate } from '../instant-date';
+import { instantAvailability, type InstantDate } from '../instant-wire';
 import { createDocumentId, db } from './instant';
 
 type InstantFile = { id: string; path?: string | null; url?: string | null };
@@ -29,8 +29,7 @@ function persistedDocument(document: InstantDocument, files: InstantFile[] | und
     id: document.id,
     title: document.title,
     markdown: document.markdown,
-    expiresAt: toDate(document.expiresAt),
-    deletedAt: toDate(document.deletedAt),
+    ...instantAvailability(document),
     images: imagesFor(document.id, files),
   };
 }

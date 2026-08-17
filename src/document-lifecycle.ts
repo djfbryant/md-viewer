@@ -109,13 +109,17 @@ export type PersistedImage = {
   url: string;
 };
 
+/** When a document stops being readable. The one rule a reader and cleanup must agree on. */
+export type DocumentAvailability = {
+  expiresAt?: Date | null;
+  deletedAt?: Date | null;
+};
+
 /** What a store returns for a read. Image ids are the ids `attachImage` handed out. */
-export type PersistedDocument = {
+export type PersistedDocument = DocumentAvailability & {
   id: string;
   title: string;
   markdown: string;
-  expiresAt?: Date | null;
-  deletedAt?: Date | null;
   images?: PersistedImage[];
 };
 
@@ -124,22 +128,23 @@ export type PersistedShareOutcome =
   | { kind: 'unavailable' }
   | { kind: 'available'; document: PersistedDocument };
 
-export type StoredDocument = {
+export type StoredDocument = DocumentAvailability & {
   id: string;
   editId: string;
   title: string;
   markdown: string;
   createdAt?: Date;
   updatedAt: Date;
-  expiresAt?: Date | null;
-  deletedAt?: Date | null;
 };
 
-/** A cleanup candidate. How its images are stored, and under which ids, stays in the adapter. */
-export type RemovableDocument = {
+/**
+ * A cleanup candidate that knows how to remove itself. The store that listed it already
+ * holds its image records, so neither the image ids nor their id space cross the seam.
+ */
+export type RemovableDocument = DocumentAvailability & {
   id: string;
-  expiresAt?: Date | null;
-  deletedAt?: Date | null;
+  /** Removes this document and every image it owns. Answers how many images went. */
+  remove(): Promise<number>;
 };
 
 export interface DocumentPersistence {
@@ -158,8 +163,6 @@ export interface DocumentPersistence {
 /** Admin-side removal. A browser cannot delete `$files`, so this is a second seam, not a second copy. */
 export interface DocumentRemovalStore {
   listDocuments(): Promise<RemovableDocument[]>;
-  /** Removes the document and every image it owns. Answers how many images went. */
-  removeDocumentAndImages(id: string): Promise<number>;
 }
 
 export interface DocumentLifecycle {
@@ -171,7 +174,7 @@ export interface DocumentLifecycle {
   delete(existing: EditCapability): Promise<DeleteDocumentOutcome>;
 }
 
-function isDocumentUnavailable(document: Pick<PersistedDocument, 'expiresAt' | 'deletedAt'>, at: Date): boolean {
+function isDocumentUnavailable(document: DocumentAvailability, at: Date): boolean {
   if (document.deletedAt) return true;
   return document.expiresAt != null && document.expiresAt.getTime() <= at.getTime();
 }
@@ -358,8 +361,7 @@ export function createDocumentCleanup(
       const removed: Array<{ documentId: string; imageCount: number }> = [];
       for (const document of await removal.listDocuments()) {
         if (!isDocumentUnavailable(document, at)) continue;
-        const imageCount = await removal.removeDocumentAndImages(document.id);
-        removed.push({ documentId: document.id, imageCount });
+        removed.push({ documentId: document.id, imageCount: await document.remove() });
       }
       return { kind: 'cleaned', removed };
     } catch {
