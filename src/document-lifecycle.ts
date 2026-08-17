@@ -155,6 +155,7 @@ type StoredDocument = {
 
 export type RemovableImage = {
   id: string;
+  fileId: string;
   expiresAt?: InstantDate | null;
 };
 
@@ -179,9 +180,9 @@ export interface DocumentPersistence {
 
 export interface DocumentRemovalStore {
   listDocuments(): Promise<RemovableDocument[]>;
-  removeDocumentAndImages(id: string, imageIds: string[]): Promise<void>;
-  removeImagesAndUpdateMarkdown(id: string, imageIds: string[], markdown: string): Promise<void>;
-  backfillImageExpiry(imageId: string, expiresAt: Date): Promise<void>;
+  removeDocumentAndImages(id: string, images: RemovableImage[]): Promise<void>;
+  removeImagesAndUpdateMarkdown(id: string, images: RemovableImage[]): Promise<void>;
+  backfillImageExpiry(image: RemovableImage, expiresAt: Date): Promise<void>;
 }
 
 export interface DocumentLifecycle {
@@ -316,9 +317,6 @@ export function createDocumentLifecycle(
       };
 
       try {
-        if (unreferenced.length) {
-          await persistence.removeImages(id, unreferenced, document.editId);
-        }
         if (newUploads.length) {
           for (const image of newUploads) {
             const uploaded = await persistence.uploadImages(id, [image], document.editId, timestamp);
@@ -333,6 +331,13 @@ export function createDocumentLifecycle(
         if (result === 'not-configured') {
           await discardUploaded();
           return { kind: 'not-configured' };
+        }
+        if (unreferenced.length) {
+          try {
+            await persistence.removeImages(id, unreferenced, document.editId);
+          } catch {
+            // Leftover files are cleanup work. The rewritten document already published.
+          }
         }
         recordPublishedAbuse(existing, imageCount, at);
         return {
@@ -419,23 +424,22 @@ export async function cleanupDueDocuments(removal: DocumentRemovalStore, at: Dat
       for (const image of images) {
         if (!toDate(image.expiresAt)) {
           const expiresAt = imageExpiresAt(at);
-          await removal.backfillImageExpiry(image.id, expiresAt);
+          await removal.backfillImageExpiry(image, expiresAt);
           image.expiresAt = expiresAt;
         }
       }
 
       if (isDocumentUnavailable(document, at)) {
-        await removal.removeDocumentAndImages(document.id, images.map((image) => image.id));
+        await removal.removeDocumentAndImages(document.id, images);
         removed.push({ documentId: document.id, imageCount: images.length });
         continue;
       }
 
-      const dueIds = images.filter((image) => isImageExpired(image.expiresAt, at)).map((image) => image.id);
-      if (!dueIds.length) continue;
+      const due = images.filter((image) => isImageExpired(image.expiresAt, at));
+      if (!due.length) continue;
 
-      const rewritten = rewriteRemovedImageRefs(document.markdown, new Set(dueIds));
-      await removal.removeImagesAndUpdateMarkdown(document.id, dueIds, rewritten);
-      expiredImages.push({ documentId: document.id, imageCount: dueIds.length });
+      await removal.removeImagesAndUpdateMarkdown(document.id, due);
+      expiredImages.push({ documentId: document.id, imageCount: due.length });
     }
 
     return { kind: 'cleaned', removed, expiredImages };

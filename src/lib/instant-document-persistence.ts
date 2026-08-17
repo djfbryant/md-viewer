@@ -38,12 +38,12 @@ const instantDocumentPersistence: DocumentPersistence = {
           contentDisposition: 'inline',
           contentType: image.file.type || 'application/octet-stream',
         });
+        uploaded.push(image.id);
         await db.transact(
           db.tx.$files[lookup('path', path)]
             .ruleParams({ knownDocumentId: documentId, editId })
             .update({ expiresAt }),
         );
-        uploaded.push(image.id);
       }
       return 'uploaded';
     } catch (error) {
@@ -72,7 +72,7 @@ const instantDocumentPersistence: DocumentPersistence = {
       { $files: { $: { where: { path: { $like: `${documentImagePrefix(documentId)}%` } } } } },
       { ruleParams: { knownDocumentId: documentId } },
     );
-    return imagesFor(documentId, data.$files).map(({ id, expiresAt }) => ({ id, expiresAt }));
+    return imagesFor(documentId, data.$files).map(({ id, expiresAt }) => ({ id, fileId: id, expiresAt }));
   },
 
   useShareDocument(id): PersistedShareOutcome {

@@ -1,8 +1,8 @@
 import { init } from '@instantdb/admin';
-import { documentImagePrefix, imageIdFromPath } from '../src/document-image';
-import type { DocumentRemovalStore, InstantDate, RemovableDocument } from '../src/document-lifecycle';
+import { documentImagePrefix, imageIdFromPath, rewriteRemovedImageRefs } from '../src/document-image';
+import type { DocumentRemovalStore, InstantDate, RemovableDocument, RemovableImage } from '../src/document-lifecycle';
 
-type InstantFile = { id: string; path?: string | null; expiresAt?: InstantDate | null };
+export type InstantOwnedFile = { id: string; path?: string | null; expiresAt?: InstantDate | null };
 type InstantDocument = {
   id: string;
   markdown: string;
@@ -10,11 +10,13 @@ type InstantDocument = {
   deletedAt?: InstantDate | null;
 };
 
-function ownedImages(documentId: string, files: InstantFile[]) {
+export function ownedImages(documentId: string, files: InstantOwnedFile[]): RemovableImage[] {
   const prefix = documentImagePrefix(documentId);
   return files.flatMap((file) => {
     const imageId = imageIdFromPath(documentId, file.path ?? '');
-    return imageId && file.path?.startsWith(prefix) ? [{ id: imageId, expiresAt: file.expiresAt }] : [];
+    return imageId && file.path?.startsWith(prefix)
+      ? [{ id: imageId, fileId: file.id, expiresAt: file.expiresAt }]
+      : [];
   });
 }
 
@@ -30,7 +32,7 @@ export function createInstantRemovalStore(
     async listDocuments(): Promise<RemovableDocument[]> {
       const data = await db.query({ documents: {}, $files: {} }) as {
         documents?: InstantDocument[];
-        $files?: InstantFile[];
+        $files?: InstantOwnedFile[];
       };
       const files = data.$files ?? [];
       return (data.documents ?? []).map((document) => ({
@@ -41,20 +43,27 @@ export function createInstantRemovalStore(
         images: ownedImages(document.id, files),
       }));
     },
-    async removeDocumentAndImages(id, imageIds) {
+    async removeDocumentAndImages(id, images) {
       await db.transact([
-        ...imageIds.map((imageId) => db.tx.$files[imageId].delete()),
+        ...images.map((image) => db.tx.$files[image.fileId].delete()),
         db.tx.documents[id].delete(),
       ]);
     },
-    async removeImagesAndUpdateMarkdown(id, imageIds, markdown) {
+    async removeImagesAndUpdateMarkdown(id, images) {
+      const data = await db.query({ documents: { $: { where: { id } } } }) as {
+        documents?: InstantDocument[];
+      };
+      const rewritten = rewriteRemovedImageRefs(
+        data.documents?.[0]?.markdown ?? '',
+        new Set(images.map((image) => image.id)),
+      );
       await db.transact([
-        ...imageIds.map((imageId) => db.tx.$files[imageId].delete()),
-        db.tx.documents[id].update({ markdown }),
+        ...images.map((image) => db.tx.$files[image.fileId].delete()),
+        db.tx.documents[id].update({ markdown: rewritten }),
       ]);
     },
-    async backfillImageExpiry(imageId, expiresAt) {
-      await db.transact(db.tx.$files[imageId].update({ expiresAt }));
+    async backfillImageExpiry(image, expiresAt) {
+      await db.transact(db.tx.$files[image.fileId].update({ expiresAt }));
     },
   };
 }

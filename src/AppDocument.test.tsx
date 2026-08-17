@@ -599,6 +599,7 @@ describe('basic anonymous documents', () => {
     expect(screen.getByText('1/6 images · kept 7 days')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
+    expect(screen.getByText('1/6 images · kept 7 days')).toBeInTheDocument();
     expect(vi.mocked(documentLifecycle.save).mock.lastCall?.[2]).toEqual(expect.objectContaining({
       images: [expect.objectContaining({ id: 'pasted-image-1' })],
     }));

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { DocumentLifecycle, EditCapability, EditableDocument, SaveDocumentOutcome } from './document-lifecycle';
-import { MAX_IMAGES_PER_DOCUMENT, IMAGE_TOO_LARGE_MESSAGE, imageTooManyMessage, liveDocumentImageCount, referencedDocumentImageIds } from './document-image';
+import { IMAGE_TOO_LARGE_MESSAGE, imageTooManyMessage, liveDocumentImageCount, referencedDocumentImageIds } from './document-image';
 
 const RECOVERY_KEY = 'markshare-editor-recovery-v1';
 const ACCESS_KEY = 'markshare-edit-access-v1';
@@ -143,7 +143,7 @@ export function useEditorSession(
   const referencedImageIds = useMemo(() => referencedDocumentImageIds(markdown), [markdown]);
   const storedImageIds = useMemo(() => Object.keys(existing?.imageSources ?? {}), [existing?.imageSources]);
   const pendingReferencedIds = useMemo(
-    () => pendingImages.filter((image) => referencedImageIds.has(image.id) && !image.uploaded && image.file).map((image) => image.id),
+    () => pendingImages.filter((image) => referencedImageIds.has(image.id)).map((image) => image.id),
     [pendingImages, referencedImageIds],
   );
   const imageCount = liveDocumentImageCount(markdown, storedImageIds, pendingReferencedIds);

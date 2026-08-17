@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { imageExpiresAt, MAX_IMAGE_BYTES } from './document-image';
+import { imageExpiresAt, MAX_IMAGE_BYTES, rewriteRemovedImageRefs } from './document-image';
 import {
   createDocumentLifecycle,
   createLocalStorageAbuseStore,
@@ -49,7 +49,8 @@ function memoryStore(): DocumentPersistence & DocumentRemovalStore & {
       documents.set(document.id, { ...documents.get(document.id), ...document });
       return 'published';
     },
-    async uploadImages(documentId, uploaded, _editId, uploadedAt) {
+    async uploadImages(documentId, uploaded, editId, uploadedAt) {
+      void editId;
       for (const image of uploaded) {
         images.set(documentId, [...(images.get(documentId) ?? []), image.id]);
         imageUrls.set(image.id, `memory://${image.id}`);
@@ -57,7 +58,7 @@ function memoryStore(): DocumentPersistence & DocumentRemovalStore & {
       }
       return 'uploaded';
     },
-    async removeImages(documentId, imageIds, _editId?) {
+    async removeImages(documentId, imageIds) {
       const remaining = (images.get(documentId) ?? []).filter((id) => !imageIds.includes(id));
       if (remaining.length) images.set(documentId, remaining);
       else images.delete(documentId);
@@ -67,7 +68,7 @@ function memoryStore(): DocumentPersistence & DocumentRemovalStore & {
       }
     },
     async listImages(documentId) {
-      return (images.get(documentId) ?? []).map((id) => ({ id, expiresAt: imageExpiry.get(id) }));
+      return (images.get(documentId) ?? []).map((id) => ({ id, fileId: id, expiresAt: imageExpiry.get(id) }));
     },
     useShareDocument(id) {
       const document = documents.get(id);
@@ -95,20 +96,26 @@ function memoryStore(): DocumentPersistence & DocumentRemovalStore & {
         markdown: document.markdown,
         expiresAt: document.expiresAt,
         deletedAt: document.deletedAt,
-        images: (images.get(document.id) ?? []).map((id) => ({ id, expiresAt: imageExpiry.get(id) })),
+        images: (images.get(document.id) ?? []).map((id) => ({ id, fileId: id, expiresAt: imageExpiry.get(id) })),
       }));
     },
-    async removeDocumentAndImages(id, imageIds) {
+    async removeDocumentAndImages(id, removable) {
       documents.delete(id);
       images.delete(id);
-      for (const imageId of imageIds) {
-        imageUrls.delete(imageId);
-        imageExpiry.delete(imageId);
+      for (const image of removable) {
+        imageUrls.delete(image.id);
+        imageExpiry.delete(image.id);
       }
     },
-    async removeImagesAndUpdateMarkdown(id, imageIds, markdown) {
+    async removeImagesAndUpdateMarkdown(id, removable) {
       const document = documents.get(id);
-      if (document) documents.set(id, { ...document, markdown });
+      if (document) {
+        documents.set(id, {
+          ...document,
+          markdown: rewriteRemovedImageRefs(document.markdown, new Set(removable.map((image) => image.id))),
+        });
+      }
+      const imageIds = removable.map((image) => image.id);
       const remaining = (images.get(id) ?? []).filter((imageId) => !imageIds.includes(imageId));
       if (remaining.length) images.set(id, remaining);
       else images.delete(id);
@@ -117,8 +124,8 @@ function memoryStore(): DocumentPersistence & DocumentRemovalStore & {
         imageExpiry.delete(imageId);
       }
     },
-    async backfillImageExpiry(imageId, expiresAt) {
-      imageExpiry.set(imageId, expiresAt);
+    async backfillImageExpiry(image, expiresAt) {
+      imageExpiry.set(image.id, expiresAt);
     },
   };
 }
@@ -723,5 +730,75 @@ describe('Document lifecycle', () => {
 
     await expect(lifecycle.save('# Notes', undefined, { images: [image] })).resolves.toMatchObject({ kind: 'published' });
     expect(store.images.size).toBe(0);
+  });
+
+  it('publishes the rewritten document even if leftover image deletion fails', async () => {
+    const store = memoryStore();
+    const ids = ['doc-id', 'edit-id'];
+    const lifecycle = createDocumentLifecycle({
+      ...store,
+      removeImages: async () => {
+        throw new Error('delete failed');
+      },
+    }, () => ids.shift()!, () => new Date('2026-08-13T12:00:00Z'));
+    const image = { id: 'leftover', file: new File(['x'], 'leftover.png', { type: 'image/png' }) };
+    const published = await lifecycle.save('# Notes\n\n![leftover](markshare-image:leftover)', undefined, { images: [image] });
+    if (published.kind !== 'published') throw new Error('Expected save to succeed');
+
+    await expect(lifecycle.save('# Notes', published.document)).resolves.toMatchObject({
+      kind: 'published',
+      document: { markdown: '# Notes' },
+    });
+    expect(store.images.get('doc-id')).toEqual(['leftover']);
+  });
+
+  it('keeps unreferenced images when persist fails after a dropped ref', async () => {
+    const store = memoryStore();
+    let persist: 'ok' | 'fail' = 'ok';
+    const persistence: DocumentPersistence = {
+      ...store,
+      async save(document) {
+        if (persist === 'fail') throw new Error('persist failed');
+        return store.save(document);
+      },
+    };
+    const ids = ['doc-id', 'edit-id'];
+    const lifecycle = createDocumentLifecycle(persistence, () => ids.shift()!, () => new Date('2026-08-13T12:00:00Z'));
+    const image = { id: 'kept', file: new File(['x'], 'kept.png', { type: 'image/png' }) };
+    const published = await lifecycle.save('# Notes\n\n![kept](markshare-image:kept)', undefined, { images: [image] });
+    if (published.kind !== 'published') throw new Error('Expected save to succeed');
+
+    persist = 'fail';
+    await expect(lifecycle.save('# Notes', published.document)).resolves.toEqual({ kind: 'failed' });
+    expect(store.images.get('doc-id')).toEqual(['kept']);
+    expect(store.documents.get('doc-id')?.markdown).toBe('# Notes\n\n![kept](markshare-image:kept)');
+  });
+
+  it('rewrites the current stored markdown rather than a stale list snapshot', async () => {
+    const uploadedAt = new Date('2026-08-13T12:00:00.000Z');
+    const dueAt = imageExpiresAt(uploadedAt);
+    let now = uploadedAt;
+    const store = memoryStore();
+    const listDocuments = store.listDocuments.bind(store);
+    store.listDocuments = async () => {
+      const listed = await listDocuments();
+      const document = store.documents.get('doc-id');
+      if (document) {
+        store.documents.set('doc-id', {
+          ...document,
+          markdown: '# Edited later\n\n![sketch.png](markshare-image:sketch)',
+        });
+      }
+      return listed;
+    };
+    const ids = ['doc-id', 'edit-id'];
+    const lifecycle = createDocumentLifecycle(store, () => ids.shift()!, () => now, store);
+    const image = { id: 'sketch', file: new Blob(['png'], { type: 'image/png' }) };
+    const published = await lifecycle.save('# Notes\n\n![sketch.png](markshare-image:sketch)', undefined, { images: [image] });
+    if (published.kind !== 'published') throw new Error('Expected save to succeed');
+
+    now = dueAt;
+    await expect(lifecycle.cleanup()).resolves.toMatchObject({ kind: 'cleaned' });
+    expect(store.documents.get('doc-id')?.markdown).toBe('# Edited later\n\n*[Removed image: sketch.png]*');
   });
 });
