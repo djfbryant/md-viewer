@@ -1,7 +1,10 @@
 import { init } from '@instantdb/admin';
 import { documentImagePrefix } from '../src/document-image';
-import type { DocumentRemovalStore, InstantDate, RemovableDocument } from '../src/document-lifecycle';
+import type { DocumentRemovalStore, RemovableDocument } from '../src/document-lifecycle';
+import { instantAvailability, type InstantDate } from '../src/instant-wire';
 
+// `$files.id` is an Instant storage id, not the image id the editor handed out. It is
+// captured with the document that owns it and never leaves this adapter.
 type InstantFile = { id: string; path?: string | null };
 type InstantDocument = {
   id: string;
@@ -9,7 +12,7 @@ type InstantDocument = {
   deletedAt?: InstantDate | null;
 };
 
-function ownedImageIds(documentId: string, files: InstantFile[]) {
+function ownedFileIds(documentId: string, files: InstantFile[]) {
   const prefix = documentImagePrefix(documentId);
   return files.filter((file) => file.path?.startsWith(prefix)).map((file) => file.id);
 }
@@ -29,18 +32,20 @@ export function createInstantRemovalStore(
         $files?: InstantFile[];
       };
       const files = data.$files ?? [];
-      return (data.documents ?? []).map((document) => ({
-        id: document.id,
-        expiresAt: document.expiresAt,
-        deletedAt: document.deletedAt,
-        imageIds: ownedImageIds(document.id, files),
-      }));
-    },
-    async removeDocumentAndImages(id, imageIds) {
-      await db.transact([
-        ...imageIds.map((imageId) => db.tx.$files[imageId].delete()),
-        db.tx.documents[id].delete(),
-      ]);
+      return (data.documents ?? []).map((document) => {
+        const fileIds = ownedFileIds(document.id, files);
+        return {
+          id: document.id,
+          ...instantAvailability(document),
+          async remove() {
+            await db.transact([
+              ...fileIds.map((fileId) => db.tx.$files[fileId].delete()),
+              db.tx.documents[document.id].delete(),
+            ]);
+            return fileIds.length;
+          },
+        };
+      });
     },
   };
 }

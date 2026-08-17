@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import cleanupHandler from '../api/cleanup';
 import { handleScheduledCleanup } from './scheduled-cleanup';
+
+afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('scheduled cleanup transport', () => {
   it('rejects requests that are not the Vercel cron invocation', async () => {
@@ -29,6 +32,20 @@ describe('scheduled cleanup transport', () => {
       body: { kind: 'cleaned', documentsRemoved: 2, imagesRemoved: 2 },
     });
     expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it('runs the cron through document cleanup, which reports a deployment with no admin credentials', async () => {
+    vi.stubEnv('CRON_SECRET', 'cron-secret');
+    vi.stubEnv('INSTANT_APP_ID', '');
+    vi.stubEnv('VITE_INSTANT_APP_ID', '');
+    vi.stubEnv('INSTANT_APP_ADMIN_TOKEN', '');
+
+    const response = await cleanupHandler(new Request('https://markshare.test/api/cleanup', {
+      headers: { authorization: 'Bearer cron-secret' },
+    }));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ kind: 'not-configured' });
   });
 
   it('schedules the cleanup path once a day', () => {

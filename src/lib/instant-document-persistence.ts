@@ -1,15 +1,37 @@
 import { lookup } from '@instantdb/react';
 import { documentImagePath, documentImagePrefix, imageIdFromPath } from '../document-image';
-import { createDocumentLifecycle, createLocalStorageAbuseStore, type DocumentPersistence, type PersistedImage, type PersistedShareOutcome } from '../document-lifecycle';
+import { createDocumentLifecycle, createLocalStorageAbuseStore, type DocumentPersistence, type PersistedDocument, type PersistedImage, type PersistedShareOutcome } from '../document-lifecycle';
+import { instantAvailability, type InstantDate } from '../instant-wire';
 import { createDocumentId, db } from './instant';
 
 type InstantFile = { id: string; path?: string | null; url?: string | null };
+type InstantDocument = {
+  id: string;
+  title: string;
+  markdown: string;
+  expiresAt?: InstantDate | null;
+  deletedAt?: InstantDate | null;
+};
 
 function imagesFor(documentId: string, files: InstantFile[] | undefined): PersistedImage[] {
   return (files ?? []).flatMap((file) => {
     const id = imageIdFromPath(documentId, file.path ?? '');
     return id && file.url ? [{ id, url: file.url }] : [];
   });
+}
+
+/**
+ * Instant rows carry wire dates and the private editId. Only the document a reader is
+ * allowed to see crosses into the lifecycle, with dates already resolved.
+ */
+function persistedDocument(document: InstantDocument, files: InstantFile[] | undefined): PersistedDocument {
+  return {
+    id: document.id,
+    title: document.title,
+    markdown: document.markdown,
+    ...instantAvailability(document),
+    images: imagesFor(document.id, files),
+  };
 }
 
 const instantDocumentPersistence: DocumentPersistence = {
@@ -27,26 +49,13 @@ const instantDocumentPersistence: DocumentPersistence = {
     return 'published';
   },
 
-  async uploadImages(documentId, images, editId) {
+  async uploadImage(documentId, image) {
     if (!db) return 'not-configured';
-    const uploaded: string[] = [];
-    try {
-      for (const image of images) {
-        await db.storage.uploadFile(documentImagePath(documentId, image.id), image.file, {
-          contentDisposition: 'inline',
-          contentType: image.file.type || 'application/octet-stream',
-        });
-        uploaded.push(image.id);
-      }
-      return 'uploaded';
-    } catch (error) {
-      try {
-        await instantDocumentPersistence.removeImages(documentId, uploaded, editId);
-      } catch {
-        // Compensation is best-effort; document cleanup still removes leftovers.
-      }
-      throw error;
-    }
+    await db.storage.uploadFile(documentImagePath(documentId, image.id), image.file, {
+      contentDisposition: 'inline',
+      contentType: image.file.type || 'application/octet-stream',
+    });
+    return 'uploaded';
   },
 
   async removeImages(documentId, imageIds, editId) {
@@ -83,7 +92,7 @@ const instantDocumentPersistence: DocumentPersistence = {
     const document = data?.documents[0];
     return error || !document
       ? { kind: 'unavailable' }
-      : { kind: 'available', document: { ...document, images: imagesFor(id, data.$files) } };
+      : { kind: 'available', document: persistedDocument(document, data.$files) };
   },
 
   useEditDocument(editId): PersistedShareOutcome {
@@ -105,7 +114,7 @@ const instantDocumentPersistence: DocumentPersistence = {
     if (documentQuery.isLoading || (document && filesQuery.isLoading)) return { kind: 'loading' };
     return documentQuery.error || !document
       ? { kind: 'unavailable' }
-      : { kind: 'available', document: { ...document, images: imagesFor(document.id, filesQuery.data?.$files) } };
+      : { kind: 'available', document: persistedDocument(document, filesQuery.data?.$files) };
   },
 
   async markDeleted(id, editId, deletedAt) {
@@ -132,7 +141,6 @@ export const documentLifecycle = createDocumentLifecycle(
   instantDocumentPersistence,
   createDocumentId,
   () => new Date(),
-  undefined,
   undefined,
   typeof localStorage === 'undefined' ? undefined : createLocalStorageAbuseStore(localStorage),
 );
