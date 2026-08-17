@@ -1,18 +1,14 @@
 import { init } from '@instantdb/admin';
 import { documentImagePrefix } from '../src/document-image';
-import type { DocumentRemovalStore, InstantDate, RemovableDocument } from '../src/document-lifecycle';
+import type { DocumentRemovalStore, RemovableDocument } from '../src/document-lifecycle';
+import { toDate, type InstantDate } from '../src/instant-date';
 
-type InstantFile = { id: string; path?: string | null };
+type InstantFile = { id: string };
 type InstantDocument = {
   id: string;
   expiresAt?: InstantDate | null;
   deletedAt?: InstantDate | null;
 };
-
-function ownedImageIds(documentId: string, files: InstantFile[]) {
-  const prefix = documentImagePrefix(documentId);
-  return files.filter((file) => file.path?.startsWith(prefix)).map((file) => file.id);
-}
 
 export function createInstantRemovalStore(
   appId = process.env.INSTANT_APP_ID ?? process.env.VITE_INSTANT_APP_ID,
@@ -22,25 +18,31 @@ export function createInstantRemovalStore(
 
   const db = init({ appId, adminToken });
 
+  // `$files.id` is an Instant storage id, not the image id the editor handed out.
+  // It never leaves this adapter.
+  const ownedFileIds = async (documentId: string) => {
+    const data = await db.query({
+      $files: { $: { where: { path: { $like: `${documentImagePrefix(documentId)}%` } } } },
+    }) as { $files?: InstantFile[] };
+    return (data.$files ?? []).map((file) => file.id);
+  };
+
   return {
     async listDocuments(): Promise<RemovableDocument[]> {
-      const data = await db.query({ documents: {}, $files: {} }) as {
-        documents?: InstantDocument[];
-        $files?: InstantFile[];
-      };
-      const files = data.$files ?? [];
+      const data = await db.query({ documents: {} }) as { documents?: InstantDocument[] };
       return (data.documents ?? []).map((document) => ({
         id: document.id,
-        expiresAt: document.expiresAt,
-        deletedAt: document.deletedAt,
-        imageIds: ownedImageIds(document.id, files),
+        expiresAt: toDate(document.expiresAt),
+        deletedAt: toDate(document.deletedAt),
       }));
     },
-    async removeDocumentAndImages(id, imageIds) {
+    async removeDocumentAndImages(id) {
+      const fileIds = await ownedFileIds(id);
       await db.transact([
-        ...imageIds.map((imageId) => db.tx.$files[imageId].delete()),
+        ...fileIds.map((fileId) => db.tx.$files[fileId].delete()),
         db.tx.documents[id].delete(),
       ]);
+      return fileIds.length;
     },
   };
 }

@@ -1,92 +1,54 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const documents = vi.hoisted(() => {
-  const documents: Array<{ id: string; editId: string; title: string; markdown: string; expiresAt?: Date; deleted?: boolean }> = [];
-  return documents;
-});
+import type { MemoryDocumentStore } from './test/memory-document-store';
+
+/**
+ * The ids the lifecycle will hand out next, in the order this test triggers them.
+ * Pasting an image asks for an id before Save asks for the document and edit ids.
+ */
+const nextIds = vi.hoisted(() => ({ queue: [] as string[], generated: 0 }));
 
 const imageSourceKind = vi.hoisted(() => ({ remote: false }));
 
-const shareQuery = vi.hoisted(() => ({ pending: false }));
+const persistence = vi.hoisted(() => ({ store: null as unknown as MemoryDocumentStore }));
 
 const mermaidApi = vi.hoisted(() => ({
   initialize: vi.fn(),
   render: vi.fn(async () => ({ svg: '<svg role="img" viewBox="0 0 1804 200"></svg>' })),
 }));
 
+// The real lifecycle over the memory persistence adapter. Only the Instant SDK is replaced,
+// so these tests exercise publish, expiry, deletion, and image upload rules as shipped.
 vi.mock('./lib/instant-document-persistence', async () => {
-  const { attachDocumentImage } = await import('./document-image');
-  const imageSourcesFrom = (markdown: string) => Object.fromEntries(
-    [...markdown.matchAll(/!\[[^\]]*\]\(markshare-image:([A-Za-z0-9._-]+)\)/g)].map((match) => [
-      match[1]!,
-      imageSourceKind.remote
-        ? `https://instant-storage.s3.amazonaws.com/apps/secret/${match[1]}.png`
-        : `blob:${match[1]}`,
-    ]),
-  );
+  const { createDocumentLifecycle } = await import('./document-lifecycle');
+  const { createMemoryDocumentStore } = await import('./test/memory-document-store');
+  persistence.store = createMemoryDocumentStore((imageId) => (imageSourceKind.remote
+    ? `https://instant-storage.s3.amazonaws.com/apps/secret/${imageId}.png`
+    : `blob:${imageId}`));
+  const generous = { max: 1000, windowMs: 60 * 60 * 1000 };
   return {
-  documentLifecycle: {
-    attachImage: (file: { name: string; type: string; size: number }, count: number) => (
-      attachDocumentImage(file, count, () => `pasted-image-${count + 1}`)
+    documentLifecycle: createDocumentLifecycle(
+      persistence.store,
+      () => nextIds.queue.shift() ?? `generated-id-${nextIds.generated += 1}`,
+      () => new Date(),
+      { create: generous, upload: generous },
     ),
-    save: vi.fn(async (markdown: string, _existing?: { id: string; editId: string }, options?: { expiresAt?: Date | null }) => {
-      const document = {
-        id: 'opaque-document-id',
-        editId: documents.find((candidate) => candidate.id === 'opaque-document-id')?.editId ?? 'private-edit-capability',
-        title: markdown.startsWith('# ') ? markdown.split('\n')[0].slice(2) : 'Untitled document',
-        markdown,
-        ...(options?.expiresAt ? { expiresAt: options.expiresAt } : {}),
-      };
-      const existing = documents.find((candidate) => candidate.id === document.id);
-      if (existing) Object.assign(existing, document);
-      else documents.push(document);
-      return { kind: 'published', document };
-    }),
-    delete: vi.fn(async () => {
-      const document = documents.find((candidate) => candidate.id === 'opaque-document-id');
-      if (document) document.deleted = true;
-      return { kind: 'deleted' };
-    }),
-    rotate: vi.fn(async (existing: { id: string; editId: string }) => {
-      const document = documents.find((candidate) => candidate.id === existing.id && candidate.editId === existing.editId);
-      if (!document) return { kind: 'failed' };
-      document.editId = 'replacement-edit-capability';
-      return { kind: 'rotated', document: { id: document.id, editId: document.editId } };
-    }),
-    useShareDocument: (id: string) => {
-      if (shareQuery.pending) return { kind: 'loading' };
-      const document = documents.find((candidate) => candidate.id === id && !candidate.deleted);
-      if (!document) return { kind: 'unavailable' };
-      if (document.expiresAt && document.expiresAt.getTime() <= Date.now()) return { kind: 'unavailable' };
-      const imageSources = imageSourcesFrom(document.markdown);
-      return {
-        kind: 'available',
-        document: {
-          id: document.id,
-          title: document.title,
-          markdown: document.markdown,
-          expiresAt: document.expiresAt,
-          ...(Object.keys(imageSources).length ? { imageSources } : {}),
-        },
-      };
-    },
-    useEditDocument: (editId: string) => {
-      if (!editId) return { kind: 'unavailable' };
-      const document = documents.find((candidate) => candidate.editId === editId && !candidate.deleted);
-      if (!document) return { kind: 'unavailable' };
-      if (document.expiresAt && document.expiresAt.getTime() <= Date.now()) return { kind: 'unavailable' };
-      const imageSources = imageSourcesFrom(document.markdown);
-      return { kind: 'available', document: { ...document, ...(Object.keys(imageSources).length ? { imageSources } : {}) } };
-    },
-  },
   };
 });
 
 vi.mock('mermaid', () => ({ default: mermaidApi }));
 
 import { App } from './App';
-import { documentLifecycle } from './lib/instant-document-persistence';
+
+const store = () => persistence.store;
+
+/** Publishes a document this browser did not author, the way another author's Save would. */
+const givenDocument = (document: { id: string; editId: string; title: string; markdown: string; expiresAt?: Date }) => {
+  store().addDocument({ ...document, updatedAt: new Date() });
+};
+
+const queueIds = (...ids: string[]) => { nextIds.queue = ids; };
 
 beforeEach(() => {
   const values = new Map<string, string>();
@@ -99,9 +61,13 @@ beforeEach(() => {
       setItem: (key: string, value: string) => values.set(key, value),
     },
   });
-  documents.length = 0;
+  store().documents.clear();
+  store().images.clear();
+  store().imageUrls.clear();
+  store().pending = false;
+  queueIds('opaque-document-id', 'private-edit-capability', 'replacement-edit-capability');
+  nextIds.generated = 0;
   imageSourceKind.remote = false;
-  shareQuery.pending = false;
   window.history.replaceState({}, '', '/');
   window.matchMedia = vi.fn().mockImplementation(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
 });
@@ -302,7 +268,7 @@ describe('basic anonymous documents', () => {
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await screen.findByText('Changes saved.');
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
-    const savesBeforeCopying = vi.mocked(documentLifecycle.save).mock.calls.length;
+    const saves = vi.spyOn(store(), 'save');
 
     const copyShare = screen.getByRole('button', { name: 'Copy share link' });
     // A native button, so the browser activates it on Enter and Space without extra handlers.
@@ -324,7 +290,7 @@ describe('basic anonymous documents', () => {
       ['http://localhost/s/opaque-document-id'],
       ['http://localhost/e/private-edit-capability'],
     ]);
-    expect(vi.mocked(documentLifecycle.save).mock.calls).toHaveLength(savesBeforeCopying);
+    expect(saves).not.toHaveBeenCalled();
     expect(screen.getByRole('dialog', { name: 'Your document is live' })).toBeInTheDocument();
   });
 
@@ -413,7 +379,7 @@ describe('basic anonymous documents', () => {
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await screen.findByText('Changes saved.');
 
-    documents.push({ id: 'other-document-id', editId: 'other-edit-capability', title: 'Other notes', markdown: '# Other notes' });
+    givenDocument({ id: 'other-document-id', editId: 'other-edit-capability', title: 'Other notes', markdown: '# Other notes' });
     window.history.replaceState({}, '', '/e/other-edit-capability');
     fireEvent.popState(window);
 
@@ -439,7 +405,7 @@ describe('basic anonymous documents', () => {
 
   it('opens a published share ID on a full page load for a visitor who never authored it', () => {
     const documentId = '52567466-9a13-483a-9e62-335adaf3ca72';
-    documents.push({
+    givenDocument({
       id: documentId,
       editId: 'visitor-must-not-see-this',
       title: 'Visitor notes',
@@ -458,7 +424,7 @@ describe('basic anonymous documents', () => {
 
   it('shows the same unavailable page for a truncated share ID', () => {
     const documentId = '52567466-9a13-483a-9e62-335adaf3ca72';
-    documents.push({
+    givenDocument({
       id: documentId,
       editId: 'private-edit-capability',
       title: 'Visitor notes',
@@ -473,6 +439,7 @@ describe('basic anonymous documents', () => {
   });
 
   it('pastes a private image into the editor and renders it on the share link', async () => {
+    queueIds('pasted-image-1', 'opaque-document-id', 'private-edit-capability');
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
     const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
     render(<App />);
@@ -492,9 +459,7 @@ describe('basic anonymous documents', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
-    expect(vi.mocked(documentLifecycle.save).mock.lastCall?.[2]).toEqual(expect.objectContaining({
-      images: [expect.objectContaining({ id: 'pasted-image-1' })],
-    }));
+    expect(store().images.get('opaque-document-id')).toEqual(['pasted-image-1']);
     await waitFor(() => {
       expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-image-1');
     });
@@ -507,6 +472,7 @@ describe('basic anonymous documents', () => {
 
   it('keeps the pasted preview visible until a stored Instant image can be fetched', async () => {
     imageSourceKind.remote = true;
+    queueIds('pasted-image-1', 'opaque-document-id', 'private-edit-capability');
     vi.spyOn(URL, 'createObjectURL')
       .mockReturnValueOnce('blob:pasted-preview')
       .mockReturnValue('blob:resolved-stored-image');
@@ -528,14 +494,19 @@ describe('basic anonymous documents', () => {
     expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:pasted-preview');
     expect(revokeObjectURL).not.toHaveBeenCalledWith('blob:pasted-preview');
-    expect(await screen.findByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:resolved-stored-image');
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:resolved-stored-image');
+    });
 
     fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
     expect(await screen.findByText('Read only')).toBeInTheDocument();
-    expect(await screen.findByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:resolved-stored-image');
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: 'sketch.png' })).toHaveAttribute('src', 'blob:resolved-stored-image');
+    });
   });
 
   it('drops a supported image into the editor', () => {
+    queueIds('pasted-image-1');
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:dropped-preview');
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
@@ -562,6 +533,7 @@ describe('basic anonymous documents', () => {
   });
 
   it('omits a leftover pasted image from save when its markdown ref is removed', async () => {
+    queueIds('pasted-image-1', 'opaque-document-id', 'private-edit-capability');
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
     render(<App />);
@@ -580,10 +552,11 @@ describe('basic anonymous documents', () => {
     expect(screen.getByText('0/20 images')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
-    expect(vi.mocked(documentLifecycle.save).mock.lastCall?.[2]?.images).toBeUndefined();
+    expect(store().images.get('opaque-document-id')).toBeUndefined();
   });
 
   it('uploads a pasted image if its markdown ref is restored before save', async () => {
+    queueIds('pasted-image-1', 'opaque-document-id', 'private-edit-capability');
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
@@ -603,9 +576,7 @@ describe('basic anonymous documents', () => {
     expect(screen.getByText('1/20 images')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     expect(await screen.findByText('Changes saved.')).toBeInTheDocument();
-    expect(vi.mocked(documentLifecycle.save).mock.lastCall?.[2]).toEqual(expect.objectContaining({
-      images: [expect.objectContaining({ id: 'pasted-image-1' })],
-    }));
+    expect(store().images.get('opaque-document-id')).toEqual(['pasted-image-1']);
   });
 });
 
@@ -614,7 +585,7 @@ describe('share link appearance', () => {
 
   /** Puts the browser on a published share link the visitor did not author. */
   const openShareLink = () => {
-    documents.push({
+    givenDocument({
       id: shareId,
       editId: 'visitor-must-not-see-this',
       title: 'Visitor notes',
@@ -722,7 +693,7 @@ describe('share link appearance', () => {
   });
 
   it('keeps the control on a loading share link', () => {
-    shareQuery.pending = true;
+    store().pending = true;
     openShareLink();
     render(<App />);
 
@@ -742,7 +713,7 @@ describe('share link appearance', () => {
   });
 
   it('keeps the control on an expired share link without offering an edit control', async () => {
-    documents.push({
+    givenDocument({
       id: shareId,
       editId: 'visitor-must-not-see-this',
       title: 'Expired notes',
