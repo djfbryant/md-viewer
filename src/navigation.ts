@@ -1,6 +1,8 @@
 export const SHARE_PATH_PREFIX = '/s/';
+export const DOCUMENT_PATH_PREFIX = '/d/';
 export const EDIT_PATH_PREFIX = '/e/';
 export const EDITOR_PATH = '/new';
+export const SIGN_IN_PATH = '/sign-in';
 export const ABOUT_PATH = '/about';
 export const PRIVACY_PATH = '/privacy';
 export const ACCEPTABLE_USE_PATH = '/acceptable-use';
@@ -9,10 +11,11 @@ export type InfoPage = 'about' | 'privacy' | 'acceptable-use';
 
 export type Route =
   | { kind: 'home' }
+  | { kind: 'sign-in' }
   | { kind: 'editor' }
   | { kind: 'info'; page: InfoPage }
   | { kind: 'share'; documentId: string }
-  | { kind: 'edit'; editId: string }
+  | { kind: 'document'; documentId: string }
   | { kind: 'unavailable' };
 
 export const infoPath: Record<InfoPage, string> = {
@@ -34,6 +37,7 @@ function tokenAfter(pathname: string, prefix: string) {
 
 export function recognizeRoute(pathname: string): Route {
   if (pathname === '/') return { kind: 'home' };
+  if (pathname === SIGN_IN_PATH) return { kind: 'sign-in' };
   if (pathname === EDITOR_PATH) return { kind: 'editor' };
   if (pathname === ABOUT_PATH || pathname === `${ABOUT_PATH}/`) return { kind: 'info', page: 'about' };
   if (pathname === PRIVACY_PATH || pathname === `${PRIVACY_PATH}/`) return { kind: 'info', page: 'privacy' };
@@ -44,9 +48,9 @@ export function recognizeRoute(pathname: string): Route {
     return documentId ? { kind: 'share', documentId } : { kind: 'unavailable' };
   }
 
-  if (pathname.startsWith(EDIT_PATH_PREFIX)) {
-    const editId = tokenAfter(pathname, EDIT_PATH_PREFIX);
-    return editId ? { kind: 'edit', editId } : { kind: 'unavailable' };
+  if (pathname.startsWith(DOCUMENT_PATH_PREFIX)) {
+    const documentId = tokenAfter(pathname, DOCUMENT_PATH_PREFIX);
+    return documentId ? { kind: 'document', documentId } : { kind: 'unavailable' };
   }
 
   return { kind: 'unavailable' };
@@ -67,7 +71,7 @@ export type RoutePrivacy = {
 };
 
 function isPrivateRoute(route: Route) {
-  return route.kind === 'share' || route.kind === 'edit' || route.kind === 'editor' || route.kind === 'unavailable';
+  return route.kind === 'share' || route.kind === 'document' || route.kind === 'editor' || route.kind === 'sign-in' || route.kind === 'unavailable';
 }
 
 export function privacyFor(route: Route, infoTitles?: Record<InfoPage, string>): RoutePrivacy {
@@ -81,7 +85,7 @@ export function privacyFor(route: Route, infoTitles?: Record<InfoPage, string>):
 }
 
 export function robotsTxt() {
-  return ['User-agent: *', 'Allow: /', 'Disallow: /s/', 'Disallow: /e/', 'Disallow: /new', ''].join('\n');
+  return ['User-agent: *', 'Allow: /', 'Disallow: /s/', 'Disallow: /d/', 'Disallow: /e/', 'Disallow: /new', 'Disallow: /sign-in', ''].join('\n');
 }
 
 export function responseHeadersFor(pathname: string) {
@@ -96,16 +100,16 @@ export function sharePath(id: string) {
   return `${SHARE_PATH_PREFIX}${encodeURIComponent(id)}`;
 }
 
-export function editPath(editId: string) {
-  return `${EDIT_PATH_PREFIX}${encodeURIComponent(editId)}`;
+export function documentPath(id: string) {
+  return `${DOCUMENT_PATH_PREFIX}${encodeURIComponent(id)}`;
 }
 
 export function shareUrl(id: string) {
   return new URL(sharePath(id), window.location.origin).toString();
 }
 
-export function editUrl(editId: string) {
-  return new URL(editPath(editId), window.location.origin).toString();
+export function documentUrl(id: string) {
+  return new URL(documentPath(id), window.location.origin).toString();
 }
 
 export function pushPath(path: string) {

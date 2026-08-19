@@ -1,6 +1,13 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
+import type { ClubSession } from './club-auth';
+
+const creatorClub: ClubSession = {
+  status: 'signed-in',
+  user: { id: 'creator-1', email: 'writer@example.com' },
+  isCreator: true,
+};
 
 beforeEach(() => {
   const values = new Map<string, string>();
@@ -24,9 +31,17 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('MarkShare shell', () => {
-  it('starts a document from the home page', () => {
+  it('offers sign-in on the public home page', () => {
     window.history.replaceState({}, '', '/');
     render(<App />);
+    fireEvent.click(screen.getAllByRole('button', { name: /sign in/i })[0]);
+    expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/sign-in');
+  });
+
+  it('starts a document from the signed-in creator home', () => {
+    window.history.replaceState({}, '', '/');
+    render(<App club={creatorClub} />);
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     expect(screen.getByRole('textbox', { name: /markdown document/i })).toBeInTheDocument();
     expect(screen.getByText('Your preview will appear here')).toBeInTheDocument();
@@ -47,7 +62,7 @@ describe('MarkShare shell', () => {
 
     fireEvent.click(screen.getAllByRole('link', { name: 'Privacy' })[0]);
     expect(screen.getByRole('heading', { name: 'Privacy' })).toBeInTheDocument();
-    expect(screen.getByText(/no account/i)).toBeInTheDocument();
+    expect(screen.getByText(/there is no encryption/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getAllByRole('link', { name: 'Acceptable use' })[0]);
     expect(screen.getByRole('heading', { name: 'Acceptable use' })).toBeInTheDocument();
@@ -90,7 +105,7 @@ describe('MarkShare shell', () => {
   });
 
   it('keeps the theme control in the editor bar and carries the choice back to home', () => {
-    render(<App />);
+    render(<App club={creatorClub} />);
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
 
     fireEvent.click(screen.getByRole('button', { name: /theme: system/i }));

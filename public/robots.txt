@@ -1,5 +1,7 @@
 User-agent: *
 Allow: /
 Disallow: /s/
+Disallow: /d/
 Disallow: /e/
 Disallow: /new
+Disallow: /sign-in

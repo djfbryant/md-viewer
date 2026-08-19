@@ -9,19 +9,26 @@ import {
 } from './document-lifecycle';
 import { createMemoryDocumentStore } from './test/memory-document-store';
 
+const unusedPersistence = {
+  useCreatorLibrary: () => ({ loading: false, owned: [], granted: [] }),
+  useClubCreators: () => [],
+  grantEditor: async () => 'granted' as const,
+  revokeEditor: async () => 'revoked' as const,
+  findCreatorUserId: async () => null,
+};
+
 const unavailable = { kind: 'unavailable' as const };
 
 describe('Document lifecycle', () => {
   it('publishes a titled document that a holder of its share ID can read', async () => {
     const persistence = createMemoryDocumentStore();
-    const ids = ['opaque-document-id', 'private-edit-capability'];
-    const lifecycle = createDocumentLifecycle(persistence, () => ids.shift()!, () => new Date('2026-08-13T12:00:00Z'));
+    const lifecycle = createDocumentLifecycle(persistence, () => 'opaque-document-id', () => new Date('2026-08-13T12:00:00Z'));
 
-    const published = await lifecycle.save('# Release notes\n\nHello **reader**.');
+    const published = await lifecycle.save('# Release notes\n\nHello **reader**.', undefined, undefined, 'owner-user');
 
     expect(published).toEqual({
       kind: 'published',
-      document: { id: 'opaque-document-id', editId: 'private-edit-capability', title: 'Release notes', markdown: '# Release notes\n\nHello **reader**.' },
+      document: { id: 'opaque-document-id', title: 'Release notes', markdown: '# Release notes\n\nHello **reader**.' },
     });
     expect(lifecycle.useShareDocument('opaque-document-id')).toEqual({
       kind: 'available',
@@ -146,7 +153,7 @@ describe('Document lifecycle', () => {
       useShareDocument: () => unavailable,
       useEditDocument: () => unavailable,
       markDeleted: vi.fn(),
-      rotateEditId: vi.fn(),
+      ...unusedPersistence,
     };
     const lifecycle = createDocumentLifecycle(persistence, () => 'opaque-document-id');
 
@@ -162,7 +169,7 @@ describe('Document lifecycle', () => {
       useShareDocument: () => unavailable,
       useEditDocument: () => unavailable,
       markDeleted: async () => 'not-configured',
-      rotateEditId: async () => 'not-configured',
+      ...unusedPersistence,
     }, () => 'opaque-document-id');
 
     await expect(lifecycle.save('Text')).resolves.toEqual({ kind: 'not-configured' });
@@ -312,26 +319,27 @@ describe('Document lifecycle', () => {
     expect(store.images.has(published.document.id)).toBe(false);
   });
 
-  it('lets an edit capability open the saved document without exposing that capability on the share outcome', async () => {
-    const ids = ['opaque-document-id', 'private-edit-capability'];
-    const lifecycle = createDocumentLifecycle(createMemoryDocumentStore(), () => ids.shift()!);
-    await lifecycle.save('# Release notes\n\nHello **reader**.');
+  it('lets the owner open the saved document for edit without exposing role on the share outcome', async () => {
+    const lifecycle = createDocumentLifecycle(createMemoryDocumentStore(), () => 'opaque-document-id');
+    await lifecycle.save('# Release notes\n\nHello **reader**.', undefined, undefined, 'owner-user');
 
-    expect(lifecycle.useEditDocument('private-edit-capability')).toEqual({
+    expect(lifecycle.useEditDocument('opaque-document-id', 'owner-user')).toEqual({
       kind: 'available',
       document: {
         id: 'opaque-document-id',
-        editId: 'private-edit-capability',
         title: 'Release notes',
         markdown: '# Release notes\n\nHello **reader**.',
+        role: 'owner',
+        editors: [],
       },
     });
     expect(lifecycle.useShareDocument('opaque-document-id')).toEqual({
       kind: 'available',
       document: { id: 'opaque-document-id', title: 'Release notes', markdown: '# Release notes\n\nHello **reader**.' },
     });
-    expect(lifecycle.useEditDocument('wrong-edit-capability')).toEqual(unavailable);
-    expect(lifecycle.useEditDocument('')).toEqual(unavailable);
+    expect(lifecycle.useEditDocument('opaque-document-id', 'stranger-user')).toEqual(unavailable);
+    expect(lifecycle.useEditDocument('opaque-document-id', null)).toEqual(unavailable);
+    expect(lifecycle.useEditDocument('', 'owner-user')).toEqual(unavailable);
   });
 
   it('attaches a supported image as a document-scoped markdown reference', () => {
@@ -428,10 +436,10 @@ describe('Document lifecycle', () => {
     let uploads = 0;
     const persistence: DocumentPersistence = {
       ...store,
-      uploadImage: async (documentId, image, editId, expiresAt) => {
+      uploadImage: async (documentId, image, expiresAt) => {
         uploads += 1;
         if (uploads === 2) throw new Error('upload failed');
-        return store.uploadImage(documentId, image, editId, expiresAt);
+        return store.uploadImage(documentId, image, expiresAt);
       },
     };
     const lifecycle = createDocumentLifecycle(persistence, () => 'opaque-document-id');
@@ -489,40 +497,49 @@ describe('Document lifecycle', () => {
       document: { imageSources: { 'secret-image': 'memory://secret-image' } },
     });
     expect(lifecycle.useShareDocument(expired.document.id)).toEqual(unavailable);
-    expect(lifecycle.useEditDocument(expired.document.editId)).toEqual(unavailable);
+    expect(lifecycle.useEditDocument(expired.document.id, 'owner-user')).toEqual(unavailable);
   });
 
-  it('replaces a leaked edit capability while the share link continues to serve the saved document', async () => {
-    const ids = ['opaque-document-id', 'private-edit-capability', 'replacement-edit-capability'];
-    const lifecycle = createDocumentLifecycle(createMemoryDocumentStore(), () => ids.shift()!);
-    const published = await lifecycle.save('# Release notes');
+  it('lets the owner grant and revoke another signed-in creator without changing the share link', async () => {
+    const store = createMemoryDocumentStore();
+    store.creators.set('editor@example.com', 'editor-user');
+    const lifecycle = createDocumentLifecycle(store, () => 'opaque-document-id');
+    const published = await lifecycle.save('# Release notes', undefined, undefined, 'owner-user');
     if (published.kind !== 'published') throw new Error('Expected save to succeed');
 
-    await expect(lifecycle.rotate(published.document)).resolves.toEqual({
-      kind: 'rotated',
-      document: { id: 'opaque-document-id', editId: 'replacement-edit-capability' },
-    });
-
-    expect(lifecycle.useEditDocument('private-edit-capability')).toEqual(unavailable);
-    expect(lifecycle.useEditDocument('replacement-edit-capability')).toMatchObject({
+    await expect(lifecycle.grantEditor(published.document, 'editor@example.com')).resolves.toEqual({ kind: 'granted' });
+    expect(lifecycle.useEditDocument('opaque-document-id', 'editor-user')).toMatchObject({
       kind: 'available',
-      document: { id: 'opaque-document-id', editId: 'replacement-edit-capability', markdown: '# Release notes' },
+      document: { id: 'opaque-document-id', role: 'editor', markdown: '# Release notes' },
     });
     expect(lifecycle.useShareDocument('opaque-document-id')).toMatchObject({
       kind: 'available',
       document: { id: 'opaque-document-id', markdown: '# Release notes' },
     });
+
+    await expect(lifecycle.revokeEditor(published.document, 'editor-user')).resolves.toEqual({ kind: 'revoked' });
+    expect(lifecycle.useEditDocument('opaque-document-id', 'editor-user')).toEqual(unavailable);
+    expect(lifecycle.useEditDocument('opaque-document-id', 'owner-user')).toMatchObject({
+      kind: 'available',
+      document: { role: 'owner' },
+    });
   });
 
-  it('returns the same unavailable outcome for a deleted document opened through its edit capability', async () => {
-    const ids = ['opaque-document-id', 'private-edit-capability'];
-    const lifecycle = createDocumentLifecycle(createMemoryDocumentStore(), () => ids.shift()!);
-    const published = await lifecycle.save('# Secret notes');
+  it('returns unknown when the granted email is not a signed-in creator', async () => {
+    const lifecycle = createDocumentLifecycle(createMemoryDocumentStore(), () => 'opaque-document-id');
+    const published = await lifecycle.save('# Notes', undefined, undefined, 'owner-user');
+    if (published.kind !== 'published') throw new Error('Expected save to succeed');
+    await expect(lifecycle.grantEditor(published.document, 'nobody@example.com')).resolves.toEqual({ kind: 'unknown' });
+  });
+
+  it('returns the same unavailable outcome for a deleted document opened by its owner', async () => {
+    const lifecycle = createDocumentLifecycle(createMemoryDocumentStore(), () => 'opaque-document-id');
+    const published = await lifecycle.save('# Secret notes', undefined, undefined, 'owner-user');
     if (published.kind !== 'published') throw new Error('Expected save to succeed');
 
     await lifecycle.delete(published.document);
 
-    expect(lifecycle.useEditDocument(published.document.editId)).toEqual(unavailable);
+    expect(lifecycle.useEditDocument(published.document.id, 'owner-user')).toEqual(unavailable);
     expect(lifecycle.useShareDocument(published.document.id)).toEqual(unavailable);
   });
 

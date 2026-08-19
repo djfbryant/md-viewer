@@ -1,25 +1,39 @@
 import { i } from '@instantdb/react';
 
-// The document ID is generated client-side as the opaque share capability.
-// The edit ID remains private to the editor session; it is not part of a Share Link.
-// Pasted images live at documents/{documentId}/{imageId} and are retrieved only
-// with that document capability.
 const schema = i.graph({
   $files: i.entity({
     path: i.string().unique().indexed(),
     url: i.string(),
     expiresAt: i.date().optional(),
   }),
+  $users: i.entity({
+    email: i.string().unique().indexed().optional(),
+  }),
+  creators: i.entity({
+    email: i.string().unique().indexed(),
+  }),
   documents: i.entity({
     title: i.string(),
     markdown: i.string(),
-    editId: i.string().unique().indexed(),
     createdAt: i.date(),
     updatedAt: i.date(),
     expiresAt: i.date().optional(),
     deletedAt: i.date().optional(),
   }),
-}, {});
+}, {
+  creatorUser: {
+    forward: { on: 'creators', has: 'one', label: 'user' },
+    reverse: { on: '$users', has: 'one', label: 'creator' },
+  },
+  documentOwner: {
+    forward: { on: 'documents', has: 'one', label: 'owner' },
+    reverse: { on: '$users', has: 'many', label: 'ownedDocuments' },
+  },
+  documentEditors: {
+    forward: { on: 'documents', has: 'many', label: 'editors' },
+    reverse: { on: '$users', has: 'many', label: 'editableDocuments' },
+  },
+});
 
 export type AppSchema = typeof schema;
 export default schema;

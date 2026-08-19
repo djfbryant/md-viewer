@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useMemo, useState, type FocusEvent, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type FocusEvent, type MouseEvent } from 'react';
+import { ClubProvider, sendMagicCode, signInWithMagicCode, signOutClub, useClubSession, type ClubSession } from './club-auth';
 import { formatExpiry, toDatetimeLocalValue } from './document';
 import { type SharedDocument } from './document-lifecycle';
 import { MAX_IMAGES_PER_DOCUMENT } from './document-image';
 import { copyToClipboard } from './clipboard';
-import { MAX_SPLIT, MIN_SPLIT, recallEditAccess, useEditorSession, useEditorSplit } from './editor-session';
+import { MAX_SPLIT, MIN_SPLIT, useEditorSession, useEditorSplit } from './editor-session';
 import { documentLifecycle } from './lib/instant-document-persistence';
 import { downloadMarkdown, interpretMarkdown, MarkdownView, type InterpretedMarkdown, type MermaidExpandRequest } from './markdown';
 import { MermaidViewer } from './mermaid-viewer';
-import { EDITOR_PATH, editPath, editUrl, infoPath, onPathChange, privacyFor, pushPath, recognizeRoute, replacePath, sharePath, shareUrl, type InfoPage, type RoutePrivacy } from './navigation';
+import { EDITOR_PATH, SIGN_IN_PATH, documentPath, infoPath, onPathChange, privacyFor, pushPath, recognizeRoute, replacePath, sharePath, shareUrl, type InfoPage, type RoutePrivacy } from './navigation';
 import { infoCopy, infoNav } from './public-information';
 import { ThemeButton, ThemeProvider } from './theme-control';
 
@@ -72,7 +73,6 @@ function LinkBox({ label, value, className = 'link-box' }: { label: string; valu
   );
 }
 
-/** A link the author can read in full or take in one gesture. CSS truncates the box, never the copied value. */
 function CopyableLink({ copyLabel, label, onCopy, value }: { copyLabel: string; label: string; onCopy: (value: string) => void; value: string }) {
   return (
     <div className="dialog-row">
@@ -82,7 +82,19 @@ function CopyableLink({ copyLabel, label, onCopy, value }: { copyLabel: string; 
   );
 }
 
-/** Keeps Preview and Share Link on the same Mermaid presentation and viewer path. */
+function AuthActions({ onNavigate }: { onNavigate: (path: string) => void }) {
+  const club = useClubSession();
+  if (club.status === 'signed-in') {
+    return (
+      <div className="auth-actions">
+        <span className="auth-email">{club.user.email}</span>
+        <button className="button button--small" onClick={() => { void signOutClub(); onNavigate('/'); }}>Sign out</button>
+      </div>
+    );
+  }
+  return <button className="button" onClick={() => onNavigate(SIGN_IN_PATH)}>Sign in</button>;
+}
+
 function RenderedDocument({ document, imageSources }: { document: InterpretedMarkdown; imageSources?: Record<string, string> }) {
   const [expandedMermaid, setExpandedMermaid] = useState<MermaidExpandRequest | null>(null);
 
@@ -103,6 +115,10 @@ function RenderedDocument({ document, imageSources }: { document: InterpretedMar
 }
 
 function Home({ onCreate, onNavigate }: { onCreate: () => void; onNavigate: (path: string) => void }) {
+  const club = useClubSession();
+  const userId = club.status === 'signed-in' ? club.user.id : null;
+  const library = documentLifecycle.useCreatorLibrary(userId);
+
   return (
     <main className="home-shell">
       <header className="app-bar home-bar">
@@ -110,26 +126,144 @@ function Home({ onCreate, onNavigate }: { onCreate: () => void; onNavigate: (pat
         <div className="bar-actions">
           <SiteLinks onNavigate={onNavigate} />
           <ThemeButton />
+          <AuthActions onNavigate={onNavigate} />
         </div>
       </header>
-      <section className="home-content" aria-labelledby="home-title">
-        <div className="home-copy">
-          <p className="eyebrow">Markdown, quietly shared</p>
-          <h1 id="home-title">Write clearly.<br />Share simply.</h1>
-          <p className="home-description">A calm space for Markdown documents. Create a draft, then choose exactly when it becomes available.</p>
-          <button className="button button--primary create-button" onClick={onCreate}>Create a document <span aria-hidden="true">→</span></button>
-          <p className="home-note">No account required.</p>
-        </div>
-        <aside className="home-card" aria-label="How MarkShare works">
-          <div className="card-step"><span>01</span><div><strong>Write</strong><p>Use familiar Markdown in a focused workspace.</p></div></div>
-          <div className="card-step"><span>02</span><div><strong>Choose when to share</strong><p>Your draft stays yours until you save it.</p></div></div>
-          <div className="card-step"><span>03</span><div><strong>Send one link</strong><p>Readers get a clean, read-only document.</p></div></div>
-        </aside>
-      </section>
+      {club.status === 'signed-in' && club.isCreator ? (
+        <section className="home-content home-content--club" aria-labelledby="home-title">
+          <div className="home-copy">
+            <p className="eyebrow">Writing club</p>
+            <h1 id="home-title">Your documents</h1>
+            <button className="button button--primary create-button" onClick={onCreate}>Create a document <span aria-hidden="true">→</span></button>
+          </div>
+          <div className="document-lists">
+            <section aria-labelledby="owned-heading">
+              <h2 id="owned-heading">Owned</h2>
+              {library.owned.length ? (
+                <ul className="document-list">
+                  {library.owned.map((document) => (
+                    <li key={document.id}>
+                      <button className="document-list-link" onClick={() => onNavigate(documentPath(document.id))}>{document.title}</button>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="home-note">None yet.</p>}
+            </section>
+            <section aria-labelledby="granted-heading">
+              <h2 id="granted-heading">Granted to you</h2>
+              {library.granted.length ? (
+                <ul className="document-list">
+                  {library.granted.map((document) => (
+                    <li key={document.id}>
+                      <button className="document-list-link" onClick={() => onNavigate(documentPath(document.id))}>{document.title}</button>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="home-note">None yet.</p>}
+            </section>
+          </div>
+        </section>
+      ) : (
+        <section className="home-content" aria-labelledby="home-title">
+          <div className="home-copy">
+            <p className="eyebrow">Markdown, quietly shared</p>
+            <h1 id="home-title">Write clearly.<br />Share simply.</h1>
+            <p className="home-description">Invited creators write Markdown. Anyone with a share link can read it.</p>
+            {club.status === 'signed-in' ? (
+              <p className="home-note">You are not invited.</p>
+            ) : (
+              <button className="button button--primary create-button" onClick={() => onNavigate(SIGN_IN_PATH)}>Sign in <span aria-hidden="true">→</span></button>
+            )}
+          </div>
+          <aside className="home-card" aria-label="How MarkShare works">
+            <div className="card-step"><span>01</span><div><strong>Sign in</strong><p>Creators are invited. They open a code sent to their email.</p></div></div>
+            <div className="card-step"><span>02</span><div><strong>Write</strong><p>Use familiar Markdown in a focused workspace.</p></div></div>
+            <div className="card-step"><span>03</span><div><strong>Send one link</strong><p>Readers get a clean, read-only document.</p></div></div>
+          </aside>
+        </section>
+      )}
       <footer className="home-footer">
-        <span className="home-tagline">Private by default · Built for clear thinking</span>
+        <span className="home-tagline">Invite only · Share links are read only</span>
         <SiteLinks onNavigate={onNavigate} />
       </footer>
+    </main>
+  );
+}
+
+function SignIn({ onHome, onNavigate }: { onHome: () => void; onNavigate: (path: string) => void }) {
+  const club = useClubSession();
+  const [email, setEmail] = useState('');
+  const [code, setCode] = useState('');
+  const [sentEmail, setSentEmail] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (club.status === 'signed-in') onHome();
+  }, [club, onHome]);
+
+  const sendCode = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await sendMagicCode(email);
+      setSentEmail(email.trim().toLowerCase());
+    } catch {
+      setError('We could not send a code. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const verify = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await signInWithMagicCode(sentEmail, code);
+    } catch {
+      setError('That code did not work. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="info-shell">
+      <header className="app-bar">
+        <button className="brand brand-button" onClick={onHome} aria-label="Back to MarkShare home"><Brand /></button>
+        <div className="bar-actions">
+          <SiteLinks onNavigate={onNavigate} />
+          <ThemeButton />
+        </div>
+      </header>
+      <article className="info-content" aria-labelledby="sign-in-title">
+        <div className="info-article">
+          <p className="eyebrow">Creators</p>
+          <h1 id="sign-in-title">Sign in</h1>
+          {!sentEmail ? (
+            <form className="auth-form" onSubmit={(event) => { void sendCode(event); }}>
+              <label>
+                <span className="label">Email</span>
+                <input type="email" autoComplete="email" autoFocus required value={email} onChange={(event) => setEmail(event.target.value)} />
+              </label>
+              {error && <p className="auth-error">{error}</p>}
+              <button className="button button--primary" type="submit" disabled={busy}>{busy ? 'Sending…' : 'Send code'}</button>
+            </form>
+          ) : (
+            <form className="auth-form" onSubmit={(event) => { void verify(event); }}>
+              <p>Enter the code sent to your email.</p>
+              <label>
+                <span className="label">Code</span>
+                <input inputMode="numeric" autoComplete="one-time-code" autoFocus required value={code} onChange={(event) => setCode(event.target.value)} />
+              </label>
+              {error && <p className="auth-error">{error}</p>}
+              <button className="button button--primary" type="submit" disabled={busy}>{busy ? 'Checking…' : 'Sign in'}</button>
+            </form>
+          )}
+        </div>
+      </article>
     </main>
   );
 }
@@ -152,6 +286,7 @@ function Info({
         <div className="bar-actions">
           <SiteLinks current={page} onNavigate={onNavigate} />
           <ThemeButton />
+          <AuthActions onNavigate={onNavigate} />
         </div>
       </header>
       <article className="info-content" aria-labelledby="info-title">
@@ -176,24 +311,33 @@ function Editor({
   onBack,
   onNavigate,
   onReplace,
-  editId,
+  documentId,
 }: {
   onBack: () => void;
   onNavigate: (path: string) => void;
   onReplace: (path: string) => void;
-  editId?: string;
+  documentId?: string;
 }) {
+  const club = useClubSession();
+  const userId = club.status === 'signed-in' ? club.user.id : null;
   const [tab, setTab] = useState<'write' | 'preview'>('write');
   const [shareOpen, setShareOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [confirmRotate, setConfirmRotate] = useState(false);
   const [copyNotice, setCopyNotice] = useState<{ id: number; message: string } | null>(null);
-  const remote = documentLifecycle.useEditDocument(editId ?? '');
-  const existing = editId && remote.kind === 'available' ? remote.document : undefined;
-  const session = useEditorSession(documentLifecycle, existing, editId);
+  const [grantEmail, setGrantEmail] = useState('');
+  const [grantError, setGrantError] = useState<string | null>(null);
+  const remote = documentLifecycle.useEditDocument(documentId ?? '', userId);
+  const existing = documentId && remote.kind === 'available' ? remote.document : undefined;
+  const session = useEditorSession(
+    documentLifecycle,
+    existing,
+    club.status === 'signed-in' ? club.user.email : null,
+    club.status === 'signed-in' ? club.user.id : undefined,
+  );
   const split = useEditorSplit();
   const { markdown, isSaving, save, imageCount, imageSources, attachFiles } = session;
   const interpreted = useMemo(() => interpretMarkdown(markdown), [markdown]);
+  const isOwner = !documentId || existing?.role === 'owner';
 
   const insertFiles = useCallback((files: File[], target: HTMLTextAreaElement) => {
     attachFiles(files, { start: target.selectionStart, end: target.selectionEnd });
@@ -202,7 +346,7 @@ function Editor({
   const publish = useCallback(async (options?: { expiresAt?: Date | null }) => {
     const outcome = await save(options);
     if (outcome.kind === 'published' && window.location.pathname === EDITOR_PATH) {
-      onReplace(editPath(outcome.document.editId));
+      onReplace(documentPath(outcome.document.id));
     }
     return outcome;
   }, [onReplace, save]);
@@ -210,8 +354,6 @@ function Editor({
   const copyLink = useCallback((value: string, confirmation: string) => {
     void copyToClipboard(value).then((copied) => {
       const message = copied ? confirmation : 'Could not copy. Select the link and copy it.';
-      // The clipboard keeps whichever write finished last, so the last answer is the true
-      // one. A fresh id also restarts the toast when the same link is copied twice.
       setCopyNotice((current) => ({ id: (current?.id ?? 0) + 1, message }));
     });
   }, []);
@@ -233,7 +375,13 @@ function Editor({
     return () => window.removeEventListener('keydown', saveWithShortcut);
   }, [isSaving, publish]);
 
-  if (editId && session.publishedEditId !== editId) {
+  if (club.status !== 'signed-in') {
+    return <SignIn onHome={onBack} onNavigate={onNavigate} />;
+  }
+  if (!club.isCreator) {
+    return <Home onCreate={() => onNavigate(EDITOR_PATH)} onNavigate={onNavigate} />;
+  }
+  if (documentId && session.publishedId !== documentId) {
     if (remote.kind === 'unavailable') return <MissingDocument />;
     return <ReaderLayout><section className="reader-message"><p>Opening document…</p></section></ReaderLayout>;
   }
@@ -251,6 +399,7 @@ function Editor({
         </div>
         <div className="bar-actions">
           <ThemeButton />
+          <AuthActions onNavigate={onNavigate} />
           <label className="button import-button"><span>Import .md</span><input type="file" accept=".md,text/markdown,text/plain" onChange={session.importMarkdown} /></label>
           {session.publishedId && <button className="button share-button" onClick={() => setShareOpen(true)} aria-label="Share"><span className="share-long">Share</span><span className="share-short" aria-hidden="true">↗</span></button>}
           <button className="button button--primary" onClick={() => void publish()} disabled={isSaving}><span className="save-long">{isSaving ? 'Saving…' : 'Save changes'}</span><span className="save-short">Save</span></button>
@@ -308,12 +457,11 @@ function Editor({
       {session.importError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="import-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissImportError(); }}><h2 id="import-error-title">Markdown not imported</h2><p>{session.importError}</p><button autoFocus className="button button--primary" onClick={session.dismissImportError}>Done</button></section></div>}
       {session.imageError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="image-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissImageError(); }}><h2 id="image-error-title">Image not added</h2><p>{session.imageError}</p><button autoFocus className="button button--primary" onClick={session.dismissImageError}>Done</button></section></div>}
       {session.deleteError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="delete-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissDeleteError(); }}><h2 id="delete-error-title">Document not deleted</h2><p>{session.deleteError}</p><button autoFocus className="button button--primary" onClick={session.dismissDeleteError}>Done</button></section></div>}
-      {session.rotateError && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="rotate-error-title" onKeyDown={(event) => { if (event.key === 'Escape') session.dismissRotateError(); }}><h2 id="rotate-error-title">Edit link not replaced</h2><p>{session.rotateError}</p><button autoFocus className="button button--primary" onClick={session.dismissRotateError}>Done</button></section></div>}
       {!copyNotice && session.savedNotice && session.publishedId && <div className="toast" role="status">Changes saved. <button className="toast-link" onClick={() => onNavigate(sharePath(session.publishedId!))}>Open share link</button></div>}
-      {shareOpen && !confirmDelete && !confirmRotate && session.publishedId && session.publishedEditId && <div className="dialog-backdrop" role="presentation" onClick={() => { setShareOpen(false); setConfirmDelete(false); setConfirmRotate(false); }}>
-        <section className="dialog" role="dialog" aria-labelledby="share-title" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === 'Escape') { setShareOpen(false); setConfirmDelete(false); setConfirmRotate(false); } }}>
+      {shareOpen && !confirmDelete && session.publishedId && <div className="dialog-backdrop" role="presentation" onClick={() => { setShareOpen(false); setConfirmDelete(false); }}>
+        <section className="dialog" role="dialog" aria-labelledby="share-title" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === 'Escape') { setShareOpen(false); setConfirmDelete(false); } }}>
           <h2 id="share-title">Your document is live</h2>
-          <p>Anyone with the share link can read it. No one can change it. Pasted images are kept for 7 days, then become placeholder text.</p>
+          <p>Anyone with the share link can read it. No one can change it unless you grant them. Pasted images are kept for 7 days, then become placeholder text.</p>
           <div className="dialog-field">
             <span className="label">Share link — read only</span>
             <CopyableLink
@@ -323,32 +471,47 @@ function Editor({
               onCopy={(value) => copyLink(value, 'Share link copied')}
             />
           </div>
-          <div className="dialog-field">
-            <span className="label">Edit link — private, keep it safe</span>
-            <CopyableLink
-              label="Edit link — private, keep it safe"
-              copyLabel="Copy edit link"
-              value={editUrl(session.publishedEditId)}
-              onCopy={(value) => copyLink(value, 'Edit link copied — keep it private')}
-            />
-            <button className="button button--small" onClick={() => setConfirmRotate(true)}>Replace edit link</button>
-          </div>
-          <div className="dialog-field">
-            <span className="label">Expiry</span>
-            <p className="dialog-help">{formatExpiry(session.expiresAt)}</p>
-            <div className="dialog-row">
-              <input
-                type="datetime-local"
-                aria-label="Expiry date and time"
-                value={session.expiresAt ? toDatetimeLocalValue(session.expiresAt) : ''}
-                onChange={(event) => { void publish({ expiresAt: event.target.value ? new Date(event.target.value) : null }); }}
-              />
-              {session.expiresAt && <button className="button button--small" onClick={() => void publish({ expiresAt: null })}>Remove</button>}
+          {isOwner && (
+            <div className="dialog-field">
+              <span className="label">Editors</span>
+              {(existing?.editors ?? []).map((editor) => (
+                <div className="dialog-row" key={editor.userId}>
+                  <span>{editor.email}</span>
+                  <button className="button button--small" onClick={() => { void documentLifecycle.revokeEditor({ id: session.publishedId! }, editor.userId); }}>Remove</button>
+                </div>
+              ))}
+              <form className="dialog-row" onSubmit={(event) => {
+                event.preventDefault();
+                setGrantError(null);
+                void documentLifecycle.grantEditor({ id: session.publishedId! }, grantEmail).then((outcome) => {
+                  if (outcome.kind === 'granted') setGrantEmail('');
+                  else setGrantError('That person needs to be an invited creator who has already signed in.');
+                });
+              }}>
+                <input type="email" aria-label="Editor email" placeholder="creator@example.com" value={grantEmail} onChange={(event) => setGrantEmail(event.target.value)} />
+                <button className="button button--small" type="submit">Grant</button>
+              </form>
+              {grantError && <p className="dialog-help">{grantError}</p>}
             </div>
-          </div>
+          )}
+          {isOwner && (
+            <div className="dialog-field">
+              <span className="label">Expiry</span>
+              <p className="dialog-help">{formatExpiry(session.expiresAt)}</p>
+              <div className="dialog-row">
+                <input
+                  type="datetime-local"
+                  aria-label="Expiry date and time"
+                  value={session.expiresAt ? toDatetimeLocalValue(session.expiresAt) : ''}
+                  onChange={(event) => { void publish({ expiresAt: event.target.value ? new Date(event.target.value) : null }); }}
+                />
+                {session.expiresAt && <button className="button button--small" onClick={() => void publish({ expiresAt: null })}>Remove</button>}
+              </div>
+            </div>
+          )}
           <div className="dialog-actions dialog-actions--split">
-            <button className="button button--quiet button--danger" onClick={() => setConfirmDelete(true)}>Delete document</button>
-            <button className="button button--primary" onClick={() => { setShareOpen(false); setConfirmDelete(false); setConfirmRotate(false); }}>Done</button>
+            {isOwner && <button className="button button--quiet button--danger" onClick={() => setConfirmDelete(true)}>Delete document</button>}
+            <button className="button button--primary" onClick={() => { setShareOpen(false); setConfirmDelete(false); }}>Done</button>
           </div>
         </section>
       </div>}
@@ -360,19 +523,10 @@ function Editor({
           <button autoFocus className="button button--danger" onClick={() => { void session.deleteDocument().then((outcome) => { if (outcome.kind === 'deleted') { setConfirmDelete(false); setShareOpen(false); onBack(); } }); }}>Delete document</button>
         </div>
       </section></div>}
-      {confirmRotate && <div className="dialog-backdrop" role="presentation"><section className="dialog" role="alertdialog" aria-labelledby="rotate-title" onKeyDown={(event) => { if (event.key === 'Escape') setConfirmRotate(false); }}>
-        <h2 id="rotate-title">Replace this edit link?</h2>
-        <p>The current edit link will stop working. Anyone who has it will lose edit access.</p>
-        <div className="dialog-actions">
-          <button className="button" onClick={() => setConfirmRotate(false)}>Cancel</button>
-          <button autoFocus className="button button--primary" onClick={() => { void session.rotateEditLink().then((outcome) => { if (outcome.kind === 'rotated') { setConfirmRotate(false); onReplace(editPath(outcome.document.editId)); } }); }}>Replace edit link</button>
-        </div>
-      </section></div>}
     </main>
   );
 }
 
-/** Every reader page carries the theme control, so a loading, expired, or broken link is never a locked theme. */
 function ReaderLayout({ actions, children, title }: { actions?: React.ReactNode; children: React.ReactNode; title?: string }) {
   return <main className="reader-shell">
     <header className="app-bar reader-bar"><Brand />{title && <div className="document-title"><span>{title}</span><span className="pill">Read only</span></div>}<div className="bar-actions">{actions}<ThemeButton /></div></header>
@@ -397,10 +551,12 @@ function MissingDocument() {
   return <ReaderLayout><section className="reader-message"><h1>Document unavailable</h1><p>This share link is invalid or the document is no longer available.</p></section></ReaderLayout>;
 }
 
-function ShareRoute({ documentId, onEdit }: { documentId: string; onEdit: (editId: string) => void }) {
+function ShareRoute({ documentId, onEdit }: { documentId: string; onEdit: (id: string) => void }) {
+  const club = useClubSession();
+  const userId = club.status === 'signed-in' ? club.user.id : null;
   const [, setTick] = useState(0);
   const outcome = documentLifecycle.useShareDocument(documentId);
-  const rememberedEditId = recallEditAccess(documentId);
+  const editable = documentLifecycle.useEditDocument(documentId, userId);
 
   useEffect(() => {
     if (outcome.kind !== 'available' || !outcome.document.expiresAt) return;
@@ -414,11 +570,12 @@ function ShareRoute({ documentId, onEdit }: { documentId: string; onEdit: (editI
 
   if (outcome.kind === 'loading') return <ReaderLayout><section className="reader-message"><p>Opening document…</p></section></ReaderLayout>;
   return outcome.kind === 'available'
-    ? <Reader document={outcome.document} onEdit={rememberedEditId ? () => onEdit(rememberedEditId) : undefined} />
+    ? <Reader document={outcome.document} onEdit={editable.kind === 'available' ? () => onEdit(documentId) : undefined} />
     : <MissingDocument />;
 }
 
 function CurrentRoute() {
+  const club = useClubSession();
   const [pathname, setPathname] = useState(() => window.location.pathname);
   const route = recognizeRoute(pathname);
 
@@ -442,8 +599,12 @@ function CurrentRoute() {
     setPathname(path);
   }, []);
 
+  if (club.status === 'loading') {
+    return <ReaderLayout><section className="reader-message"><p>Opening…</p></section></ReaderLayout>;
+  }
+
   if (route.kind === 'share') {
-    return <ShareRoute documentId={route.documentId} onEdit={(editId) => navigate(editPath(editId))} />;
+    return <ShareRoute documentId={route.documentId} onEdit={(id) => navigate(documentPath(id))} />;
   }
 
   if (route.kind === 'unavailable') return <MissingDocument />;
@@ -458,13 +619,17 @@ function CurrentRoute() {
     );
   }
 
-  if (route.kind === 'editor' || route.kind === 'edit') {
+  if (route.kind === 'sign-in') {
+    return <SignIn onHome={() => navigate('/')} onNavigate={navigate} />;
+  }
+
+  if (route.kind === 'editor' || route.kind === 'document') {
     return (
       <Editor
         onBack={() => navigate('/')}
         onNavigate={navigate}
         onReplace={replace}
-        editId={route.kind === 'edit' ? route.editId : undefined}
+        documentId={route.kind === 'document' ? route.documentId : undefined}
       />
     );
   }
@@ -472,6 +637,6 @@ function CurrentRoute() {
   return <Home onCreate={() => navigate(EDITOR_PATH)} onNavigate={navigate} />;
 }
 
-export function App() {
-  return <ThemeProvider><CurrentRoute /></ThemeProvider>;
+export function App({ club }: { club?: ClubSession } = {}) {
+  return <ThemeProvider><ClubProvider session={club}><CurrentRoute /></ClubProvider></ThemeProvider>;
 }

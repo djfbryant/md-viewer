@@ -1,16 +1,29 @@
 import { lookup } from '@instantdb/react';
 import { documentImagePath, documentImagePrefix, imageIdFromPath } from '../document-image';
-import { createDocumentLifecycle, createLocalStorageAbuseStore, type DocumentPersistence, type PersistedDocument, type PersistedImage, type PersistedShareOutcome } from '../document-lifecycle';
+import {
+  createDocumentLifecycle,
+  createLocalStorageAbuseStore,
+  isDocumentUnavailable,
+  type ClubCreator,
+  type CreatorLibrary,
+  type DocumentPersistence,
+  type PersistedDocument,
+  type PersistedImage,
+  type PersistedShareOutcome,
+} from '../document-lifecycle';
 import { instantAvailability, toDate, type InstantDate } from '../instant-wire';
 import { createDocumentId, db } from './instant';
 
 type InstantFile = { id: string; path?: string | null; url?: string | null; expiresAt?: InstantDate | null };
+type InstantUser = { id: string; email?: string | null };
 type InstantDocument = {
   id: string;
   title: string;
   markdown: string;
   expiresAt?: InstantDate | null;
   deletedAt?: InstantDate | null;
+  owner?: InstantUser | InstantUser[] | null;
+  editors?: InstantUser[] | null;
 };
 
 function imagesFor(documentId: string, files: InstantFile[] | undefined): PersistedImage[] {
@@ -20,10 +33,17 @@ function imagesFor(documentId: string, files: InstantFile[] | undefined): Persis
   });
 }
 
-/**
- * Instant rows carry wire dates and the private editId. Only the document a reader is
- * allowed to see crosses into the lifecycle, with dates already resolved.
- */
+function asUser(value: InstantUser | InstantUser[] | null | undefined) {
+  if (!value) return undefined;
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function roleFor(document: InstantDocument, userId: string) {
+  if (asUser(document.owner)?.id === userId) return 'owner' as const;
+  if ((document.editors ?? []).some((editor) => editor.id === userId)) return 'editor' as const;
+  return undefined;
+}
+
 function persistedDocument(document: InstantDocument, files: InstantFile[] | undefined): PersistedDocument {
   return {
     id: document.id,
@@ -34,22 +54,27 @@ function persistedDocument(document: InstantDocument, files: InstantFile[] | und
   };
 }
 
+const emptyLibrary: CreatorLibrary = { loading: false, owned: [], granted: [] };
+
 const instantDocumentPersistence: DocumentPersistence = {
   async save(document) {
     if (!db) return 'not-configured';
+    if (!document.ownerUserId && document.createdAt) return 'forbidden';
 
-    await db.transact(db.tx.documents[document.id].ruleParams({ knownDocumentId: document.id, editId: document.editId }).update({
+    const write = db.tx.documents[document.id].update({
       title: document.title,
       markdown: document.markdown,
-      editId: document.editId,
       updatedAt: document.updatedAt,
       ...(document.createdAt ? { createdAt: document.createdAt } : {}),
       ...('expiresAt' in document ? { expiresAt: document.expiresAt } : {}),
-    }));
+    });
+    await db.transact(document.ownerUserId && document.createdAt
+      ? write.link({ owner: document.ownerUserId })
+      : write);
     return 'published';
   },
 
-  async uploadImage(documentId, image, editId, expiresAt) {
+  async uploadImage(documentId, image, expiresAt) {
     const database = db;
     if (!database) return 'not-configured';
     const path = documentImagePath(documentId, image.id);
@@ -60,18 +85,18 @@ const instantDocumentPersistence: DocumentPersistence = {
     // uploadFile cannot carry attributes, so retention is stamped in a second write.
     await database.transact(
       database.tx.$files[lookup('path', path)]
-        .ruleParams({ knownDocumentId: documentId, editId })
+        .ruleParams({ knownDocumentId: documentId })
         .update({ expiresAt }),
     );
     return 'uploaded';
   },
 
-  async removeImages(documentId, imageIds, editId) {
+  async removeImages(documentId, imageIds) {
     const database = db;
     if (!database || !imageIds.length) return;
     await database.transact(imageIds.map((imageId) => (
       database.tx.$files[lookup('path', documentImagePath(documentId, imageId))]
-        .ruleParams({ knownDocumentId: documentId, editId })
+        .ruleParams({ knownDocumentId: documentId })
         .delete()
     )));
   },
@@ -103,14 +128,14 @@ const instantDocumentPersistence: DocumentPersistence = {
       : { kind: 'available', document: persistedDocument(document, data.$files) };
   },
 
-  useEditDocument(editId): PersistedShareOutcome {
-    if (!db) return { kind: 'unavailable' };
+  useEditDocument(id, userId): PersistedShareOutcome {
+    if (!db || !userId) return { kind: 'unavailable' };
 
-    const documentQuery = db.useQuery(
-      { documents: { $: { where: { editId: editId || '__none__' } } } },
-      { ruleParams: { editId: editId || '__none__' } },
-    );
-    const document = documentQuery.data?.documents[0];
+    const documentQuery = db.useQuery({
+      documents: { $: { where: { id } }, owner: {}, editors: {} },
+    });
+    const document = documentQuery.data?.documents[0] as InstantDocument | undefined;
+    const role = document ? roleFor(document, userId) : undefined;
     const filesQuery = db.useQuery(
       document?.id
         ? { $files: { $: { where: { path: { $like: `${documentImagePrefix(document.id)}%` } } } } }
@@ -118,30 +143,70 @@ const instantDocumentPersistence: DocumentPersistence = {
       { ruleParams: { knownDocumentId: document?.id } },
     );
 
-    if (!editId) return { kind: 'unavailable' };
+    if (!id) return { kind: 'unavailable' };
     if (documentQuery.isLoading || (document && filesQuery.isLoading)) return { kind: 'loading' };
-    return documentQuery.error || !document
+    return documentQuery.error || !document || !role
       ? { kind: 'unavailable' }
-      : { kind: 'available', document: persistedDocument(document, filesQuery.data?.$files) };
+      : {
+        kind: 'available',
+        document: {
+          ...persistedDocument(document, filesQuery.data?.$files),
+          role,
+          editors: (document.editors ?? []).flatMap((editor) => editor.email ? [{ userId: editor.id, email: editor.email }] : []),
+        },
+      };
   },
 
-  async markDeleted(id, editId, deletedAt) {
-    if (!db) return 'not-configured';
+  useCreatorLibrary(userId): CreatorLibrary {
+    if (!db || !userId) return emptyLibrary;
+    const ownedQuery = db.useQuery({ documents: { $: { where: { 'owner.id': userId } } } });
+    const grantedQuery = db.useQuery({ documents: { $: { where: { 'editors.id': userId } } } });
+    const at = new Date();
+    const visible = (documents: InstantDocument[] | undefined) => (
+      (documents ?? []).filter((document) => !isDocumentUnavailable(instantAvailability(document), at)).map((document) => ({
+        id: document.id,
+        title: document.title,
+      }))
+    );
+    return {
+      loading: ownedQuery.isLoading || grantedQuery.isLoading,
+      owned: visible(ownedQuery.data?.documents as InstantDocument[] | undefined),
+      granted: visible(grantedQuery.data?.documents as InstantDocument[] | undefined),
+    };
+  },
 
-    await db.transact(db.tx.documents[id].ruleParams({ knownDocumentId: id, editId }).update({
-      deletedAt,
-      updatedAt: deletedAt,
-    }));
+  useClubCreators(userId): ClubCreator[] {
+    if (!db || !userId) return [];
+    const { data } = db.useQuery({ creators: { user: {} } });
+    return (data?.creators ?? []).flatMap((creator: { email: string; user?: InstantUser | InstantUser[] | null }) => {
+      const user = asUser(creator.user);
+      return user?.id ? [{ userId: user.id, email: creator.email }] : [];
+    });
+  },
+
+  async markDeleted(id, deletedAt) {
+    if (!db) return 'not-configured';
+    await db.transact(db.tx.documents[id].update({ deletedAt, updatedAt: deletedAt }));
     return 'deleted';
   },
 
-  async rotateEditId(id, editId, nextEditId) {
+  async grantEditor(id, editorUserId) {
     if (!db) return 'not-configured';
+    await db.transact(db.tx.documents[id].link({ editors: editorUserId }));
+    return 'granted';
+  },
 
-    await db.transact(db.tx.documents[id].ruleParams({ knownDocumentId: id, editId }).update({
-      editId: nextEditId,
-    }));
-    return 'rotated';
+  async revokeEditor(id, editorUserId) {
+    if (!db) return 'not-configured';
+    await db.transact(db.tx.documents[id].unlink({ editors: editorUserId }));
+    return 'revoked';
+  },
+
+  async findCreatorUserId(email) {
+    if (!db) return null;
+    const { data } = await db.queryOnce({ creators: { $: { where: { email } }, user: {} } });
+    const user = asUser(data.creators[0]?.user as InstantUser | InstantUser[] | null);
+    return user?.id ?? null;
   },
 };
 

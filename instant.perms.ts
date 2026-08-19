@@ -1,31 +1,43 @@
 import type { InstantRules } from '@instantdb/react';
 
-// A document is visible only when the requester provides its opaque ID. The
-// private edit capability is never returned to Share Link holders.
+const isCreator = "auth.ref('$user.creator.id') != []";
+const isOwner = "auth.id in data.ref('owner.id')";
+const isEditor = "auth.id in data.ref('editors.id')";
+const knownShare = "data.id == ruleParams.knownDocumentId";
+const knownFile = "data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/')";
+const editorContentOnly = `!(('expiresAt' in request.modifiedFields) || ('deletedAt' in request.modifiedFields))`;
+
 const rules = {
-  documents: {
+  $users: {
     allow: {
+      view: `auth.id == data.id || ${isCreator}`,
       create: 'true',
-      view: 'data.id == ruleParams.knownDocumentId || data.editId == ruleParams.editId',
-      update: 'data.editId == ruleParams.editId',
+      update: 'false',
       delete: 'false',
     },
-    fields: {
-      editId: 'false',
+  },
+  creators: {
+    allow: {
+      view: `data.email == auth.email || ${isCreator}`,
+      create: 'false',
+      update: 'data.email == auth.email',
+      delete: 'false',
+    },
+  },
+  documents: {
+    allow: {
+      create: `${isCreator} && ${isOwner}`,
+      view: `${knownShare} || ${isOwner} || ${isEditor}`,
+      update: `${isCreator} && (${isOwner} || (${isEditor} && ${editorContentOnly}))`,
+      delete: 'false',
     },
   },
   $files: {
     allow: {
-      view: "data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/')",
-      // uploadFile cannot send ruleParams. A live startsWith('documents/')
-      // create rule still denied anonymous uploads, so create stays open
-      // while view and delete stay capability-gated.
-      create: 'true',
-      // Retention is written after upload, because uploadFile cannot carry attributes.
-      // Gated exactly like delete: a caller who could already destroy the file is the
-      // only one who can date it, so this adds no reach that delete did not have.
-      update: "data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/') && ruleParams.editId != null",
-      delete: "data.path.startsWith('documents/' + ruleParams.knownDocumentId + '/') && ruleParams.editId != null",
+      view: knownFile,
+      create: isCreator,
+      update: `${isCreator} && ${knownFile}`,
+      delete: `${isCreator} && ${knownFile}`,
     },
   },
 } satisfies InstantRules;

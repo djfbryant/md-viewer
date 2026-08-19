@@ -5,7 +5,7 @@ import type { MemoryDocumentStore } from './test/memory-document-store';
 
 /**
  * The ids the lifecycle will hand out next, in the order this test triggers them.
- * Pasting an image asks for an id before Save asks for the document and edit ids.
+ * Pasting an image asks for an id before Save asks for the document id.
  */
 const nextIds = vi.hoisted(() => ({ queue: [] as string[], generated: 0 }));
 
@@ -40,18 +40,27 @@ vi.mock('./lib/instant-document-persistence', async () => {
 vi.mock('mermaid', () => ({ default: mermaidApi }));
 
 import { App } from './App';
+import type { ClubSession } from './club-auth';
 
 const store = () => persistence.store;
 
 /** Publishes a document this browser did not author, the way another author's Save would. */
-const givenDocument = (document: { id: string; editId: string; title: string; markdown: string; expiresAt?: Date }) => {
+const givenDocument = (document: { id: string; title: string; markdown: string; expiresAt?: Date; ownerUserId?: string }) => {
   store().addDocument({ ...document, updatedAt: new Date() });
 };
 
 const queueIds = (...ids: string[]) => { nextIds.queue = ids; };
 
-/** Pasting one image asks for an id before Save asks for the document and edit ids. */
-const queuePastedImageThenSave = () => queueIds('pasted-image-1', 'opaque-document-id', 'private-edit-capability');
+/** Pasting one image asks for an id before Save asks for the document id. */
+const queuePastedImageThenSave = () => queueIds('pasted-image-1', 'opaque-document-id');
+
+const creatorClub: ClubSession = {
+  status: 'signed-in',
+  user: { id: 'creator-1', email: 'writer@example.com' },
+  isCreator: true,
+};
+
+const renderCreatorApp = () => render(<App club={creatorClub} />);
 
 beforeEach(() => {
   const values = new Map<string, string>();
@@ -82,7 +91,7 @@ afterEach(() => {
   Reflect.deleteProperty(navigator, 'clipboard');
 });
 
-describe('basic anonymous documents', () => {
+describe('signed-in creator documents', () => {
   it('uses the same adaptive Mermaid presentation in Preview and the Share Link', async () => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
       const width = this.classList.contains('markdown') ? 600
@@ -91,7 +100,7 @@ describe('basic anonymous documents', () => {
       return { x: 0, y: 0, top: 0, left: 0, right: width, bottom: 0, width, height: 0, toJSON: () => ({}) };
     });
     const markdown = '```mermaid\nwide diagram\n```';
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: markdown } });
 
@@ -111,7 +120,7 @@ describe('basic anonymous documents', () => {
 
   it('publishes Markdown with an opaque read-only share link and renders it for a reader', async () => {
     const markdown = '# Release notes\n\nHello **reader**.';
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: markdown } });
 
@@ -175,7 +184,7 @@ describe('basic anonymous documents', () => {
 
   it('shows a configured expiry on the share link and uses the same unavailable page after delete', async () => {
     const markdown = '# Expiring notes';
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: markdown } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
@@ -194,7 +203,7 @@ describe('basic anonymous documents', () => {
   });
 
   it('shows the same unavailable response for an expired share link', async () => {
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Expired notes' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
@@ -212,7 +221,7 @@ describe('basic anonymous documents', () => {
   });
 
   it('shows the same unavailable response after a document is deleted', async () => {
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Secret notes' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
@@ -230,19 +239,18 @@ describe('basic anonymous documents', () => {
     expect(screen.queryByRole('heading', { name: 'Secret notes' })).not.toBeInTheDocument();
   });
 
-  it('opens a private edit link in the editor and keeps the share link read-only', async () => {
+  it('opens the signed-in editor after save and keeps the share link read-only', async () => {
     const markdown = '# Private notes\n\nOnly the author can change this.';
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: markdown } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await screen.findByText('Changes saved.');
-    expect(window.location.pathname).toBe('/e/private-edit-capability');
+    expect(window.location.pathname).toBe('/d/opaque-document-id');
 
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
-    expect(screen.getByRole('textbox', { name: 'Edit link — private, keep it safe' })).toHaveValue(
-      'http://localhost/e/private-edit-capability',
-    );
+    expect(screen.getByRole('textbox', { name: 'Share link — read only' })).toHaveValue('http://localhost/s/opaque-document-id');
+    expect(screen.queryByRole('textbox', { name: /edit link/i })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
 
     fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
@@ -261,11 +269,11 @@ describe('basic anonymous documents', () => {
     expect(screen.queryByRole('heading', { name: 'Private revision' })).not.toBeInTheDocument();
   });
 
-  it('copies the share link and the edit link in one gesture with distinct confirmations', async () => {
+  it('copies the share link with a confirmation and leaves the document live', async () => {
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
 
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Shared notes' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
@@ -274,7 +282,6 @@ describe('basic anonymous documents', () => {
     const saves = vi.spyOn(store(), 'save');
 
     const copyShare = screen.getByRole('button', { name: 'Copy share link' });
-    // A native button, so the browser activates it on Enter and Space without extra handlers.
     expect(copyShare.tagName).toBe('BUTTON');
     copyShare.focus();
     expect(document.activeElement).toBe(copyShare);
@@ -283,57 +290,17 @@ describe('basic anonymous documents', () => {
     expect(await screen.findByText('Share link copied')).toBeInTheDocument();
     expect(writeText.mock.calls).toEqual([['http://localhost/s/opaque-document-id']]);
     expect(screen.getByRole('dialog', { name: 'Your document is live' })).toBeInTheDocument();
-    expect(window.location.pathname).toBe('/e/private-edit-capability');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Copy edit link' }));
-
-    expect(await screen.findByText('Edit link copied — keep it private')).toBeInTheDocument();
-    expect(screen.queryByText('Share link copied')).not.toBeInTheDocument();
-    expect(writeText.mock.calls).toEqual([
-      ['http://localhost/s/opaque-document-id'],
-      ['http://localhost/e/private-edit-capability'],
-    ]);
+    expect(window.location.pathname).toBe('/d/opaque-document-id');
     expect(saves).not.toHaveBeenCalled();
-    expect(screen.getByRole('dialog', { name: 'Your document is live' })).toBeInTheDocument();
   });
 
-  it('names the link that reached the clipboard last when two copies overlap', async () => {
-    // The clipboard keeps the write that finishes last, so the confirmation must too —
-    // otherwise the author pastes the private edit link while the toast says share.
-    let finishShareCopy: (() => void) | undefined;
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: {
-        writeText: vi.fn((text: string) => (
-          text.includes('/s/') ? new Promise<void>((resolve) => { finishShareCopy = () => resolve(); }) : Promise.resolve()
-        )),
-      },
-    });
-
-    render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
-    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Shared notes' } });
-    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
-    await screen.findByText('Changes saved.');
-    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
-
-    fireEvent.click(screen.getByRole('button', { name: 'Copy share link' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Copy edit link' }));
-    expect(await screen.findByText('Edit link copied — keep it private')).toBeInTheDocument();
-
-    finishShareCopy?.();
-
-    expect(await screen.findByText('Share link copied')).toBeInTheDocument();
-    expect(screen.queryByText('Edit link copied — keep it private')).not.toBeInTheDocument();
-  });
-
-  it('keeps the share dialog and its links usable when the clipboard refuses', async () => {
+  it('keeps the share dialog usable when the clipboard refuses', async () => {
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: { writeText: vi.fn(async () => { throw new Error('permission denied'); }) },
     });
 
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Shared notes' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
@@ -344,73 +311,57 @@ describe('basic anonymous documents', () => {
     expect(await screen.findByText('Could not copy. Select the link and copy it.')).toBeInTheDocument();
     expect(screen.getByRole('dialog', { name: 'Your document is live' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Share link — read only' })).toHaveValue('http://localhost/s/opaque-document-id');
-    expect(screen.getByRole('textbox', { name: 'Edit link — private, keep it safe' })).toHaveValue('http://localhost/e/private-edit-capability');
+    expect(screen.queryByRole('textbox', { name: /edit link/i })).not.toBeInTheDocument();
   });
 
-  it('restores edit access from the edit link and forgets a replaced link', async () => {
-    render(<App />);
+  it('explains when a grant is not a signed-in invited creator', async () => {
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
-    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Kept notes' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Shared notes' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await screen.findByText('Changes saved.');
-
-    const first = screen.getByRole('textbox', { name: /markdown document/i });
-    expect(first).toHaveValue('# Kept notes');
-
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Replace edit link' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Replace edit link' }));
-    expect(await screen.findByRole('textbox', { name: 'Edit link — private, keep it safe' })).toHaveValue(
-      'http://localhost/e/replacement-edit-capability',
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
-
-    window.history.replaceState({}, '', '/e/private-edit-capability');
-    fireEvent.popState(window);
-    expect(await screen.findByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();
-    expect(screen.queryByRole('textbox', { name: /markdown document/i })).not.toBeInTheDocument();
-
-    window.history.replaceState({}, '', '/e/replacement-edit-capability');
-    fireEvent.popState(window);
-    expect(await screen.findByRole('textbox', { name: /markdown document/i })).toHaveValue('# Kept notes');
+    fireEvent.change(screen.getByLabelText('Editor email'), { target: { value: 'nobody@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Grant' }));
+    expect(await screen.findByText(/needs to be an invited creator who has already signed in/i)).toBeInTheDocument();
   });
 
-  it('does not keep the previous document visible when opening a different edit link', async () => {
-    render(<App />);
+  it('does not keep the previous document visible when opening a different signed-in document', async () => {
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Kept notes' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await screen.findByText('Changes saved.');
 
-    givenDocument({ id: 'other-document-id', editId: 'other-edit-capability', title: 'Other notes', markdown: '# Other notes' });
-    window.history.replaceState({}, '', '/e/other-edit-capability');
+    givenDocument({ id: 'other-document-id', title: 'Other notes', markdown: '# Other notes', ownerUserId: 'creator-1' });
+    window.history.replaceState({}, '', '/d/other-document-id');
     fireEvent.popState(window);
 
     expect(screen.queryByDisplayValue('# Kept notes')).not.toBeInTheDocument();
     expect(await screen.findByRole('textbox', { name: /markdown document/i })).toHaveValue('# Other notes');
   });
 
-  it('does not disclose an edit control on a share link in a browser that never saved the document', async () => {
-    render(<App />);
+  it('does not disclose an edit control on a share link to a visitor who is not signed in', async () => {
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /markdown document/i }), { target: { value: '# Shared notes' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await screen.findByText('Changes saved.');
+    cleanup();
 
-    window.localStorage.removeItem('markshare-edit-access-v1');
     window.history.replaceState({}, '', '/s/opaque-document-id');
-    fireEvent.popState(window);
+    render(<App />);
 
     expect(await screen.findByText('Read only')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
     expect(screen.queryByText(/\/e\//)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\/d\//)).not.toBeInTheDocument();
   });
 
   it('opens a published share ID on a full page load for a visitor who never authored it', () => {
     const documentId = '52567466-9a13-483a-9e62-335adaf3ca72';
     givenDocument({
       id: documentId,
-      editId: 'visitor-must-not-see-this',
       title: 'Visitor notes',
       markdown: '# Visitor notes\n\nPublished for a stranger.',
     });
@@ -429,7 +380,6 @@ describe('basic anonymous documents', () => {
     const documentId = '52567466-9a13-483a-9e62-335adaf3ca72';
     givenDocument({
       id: documentId,
-      editId: 'private-edit-capability',
       title: 'Visitor notes',
       markdown: '# Visitor notes',
     });
@@ -445,7 +395,7 @@ describe('basic anonymous documents', () => {
     queuePastedImageThenSave();
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
     const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     const editor = screen.getByRole('textbox', { name: /markdown document/i }) as HTMLTextAreaElement;
     fireEvent.change(editor, { target: { value: '# Illustrated notes' } });
@@ -481,7 +431,7 @@ describe('basic anonymous documents', () => {
       .mockReturnValue('blob:resolved-stored-image');
     const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
     vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), { headers: { 'Content-Type': 'image/png' } })));
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     const editor = screen.getByRole('textbox', { name: /markdown document/i }) as HTMLTextAreaElement;
     fireEvent.change(editor, { target: { value: '# Illustrated notes' } });
@@ -511,7 +461,7 @@ describe('basic anonymous documents', () => {
   it('drops a supported image into the editor', () => {
     queueIds('pasted-image-1');
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:dropped-preview');
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     const editor = screen.getByRole('textbox', { name: /markdown document/i });
     fireEvent.drop(editor, {
@@ -523,7 +473,7 @@ describe('basic anonymous documents', () => {
   });
 
   it('explains when a pasted image is larger than the limit', () => {
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     const oversized = new File([new Uint8Array(8)], 'huge.png', { type: 'image/png' });
     Object.defineProperty(oversized, 'size', { value: 2 * 1024 * 1024 + 1 });
@@ -539,7 +489,7 @@ describe('basic anonymous documents', () => {
     queuePastedImageThenSave();
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     const editor = screen.getByRole('textbox', { name: /markdown document/i }) as HTMLTextAreaElement;
     fireEvent.change(editor, { target: { value: '# Illustrated notes' } });
@@ -561,7 +511,7 @@ describe('basic anonymous documents', () => {
   it('uploads a pasted image when the markdown ref is still present at save', async () => {
     queuePastedImageThenSave();
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     const editor = screen.getByRole('textbox', { name: /markdown document/i }) as HTMLTextAreaElement;
     fireEvent.change(editor, { target: { value: '# Illustrated notes' } });
@@ -583,7 +533,7 @@ describe('basic anonymous documents', () => {
     queuePastedImageThenSave();
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pasted-preview');
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
-    render(<App />);
+    renderCreatorApp();
     fireEvent.click(screen.getByRole('button', { name: /create a document/i }));
     const editor = screen.getByRole('textbox', { name: /markdown document/i }) as HTMLTextAreaElement;
     fireEvent.change(editor, { target: { value: '# Illustrated notes' } });
@@ -613,7 +563,6 @@ describe('share link appearance', () => {
   const openShareLink = () => {
     givenDocument({
       id: shareId,
-      editId: 'visitor-must-not-see-this',
       title: 'Visitor notes',
       markdown: '# Visitor notes\n\nPublished for a stranger.',
     });
@@ -741,7 +690,6 @@ describe('share link appearance', () => {
   it('keeps the control on an expired share link without offering an edit control', async () => {
     givenDocument({
       id: shareId,
-      editId: 'visitor-must-not-see-this',
       title: 'Expired notes',
       markdown: '# Expired notes',
       expiresAt: new Date('2020-01-01T00:00:00Z'),

@@ -22,11 +22,30 @@ export type SharedDocument = {
   imageSources?: DocumentImageSources;
 };
 
+export type DocumentRole = 'owner' | 'editor';
+
 export type EditableDocument = SharedDocument & {
-  editId: string;
+  role: DocumentRole;
+  editors: ClubCreator[];
 };
 
-export type EditCapability = Pick<EditableDocument, 'id' | 'editId'>;
+export type DocumentHandle = Pick<SharedDocument, 'id'>;
+
+export type CreatorListItem = {
+  id: string;
+  title: string;
+};
+
+export type CreatorLibrary = {
+  loading: boolean;
+  owned: CreatorListItem[];
+  granted: CreatorListItem[];
+};
+
+export type ClubCreator = {
+  userId: string;
+  email: string;
+};
 
 export type PendingDocumentImage = {
   id: string;
@@ -44,8 +63,9 @@ export type ShareDocumentOutcome =
   | { kind: 'available'; document: SharedDocument };
 
 export type SaveDocumentOutcome =
-  | { kind: 'published'; document: EditableDocument }
+  | { kind: 'published'; document: SharedDocument }
   | { kind: 'not-configured' }
+  | { kind: 'forbidden' }
   | { kind: 'rate-limited'; limit: 'create' | 'upload' }
   | { kind: 'failed' };
 
@@ -98,11 +118,15 @@ export function createLocalStorageAbuseStore(storage: Pick<Storage, 'getItem' | 
 export type DeleteDocumentOutcome =
   | { kind: 'deleted' }
   | { kind: 'not-configured' }
+  | { kind: 'forbidden' }
   | { kind: 'failed' };
 
-export type RotateDocumentOutcome =
-  | { kind: 'rotated'; document: EditCapability }
+export type GrantEditorOutcome =
+  | { kind: 'granted' }
+  | { kind: 'revoked' }
+  | { kind: 'unknown' }
   | { kind: 'not-configured' }
+  | { kind: 'forbidden' }
   | { kind: 'failed' };
 
 export type EditDocumentOutcome =
@@ -145,6 +169,8 @@ export type PersistedDocument = DocumentAvailability & {
   id: string;
   title: string;
   markdown: string;
+  role?: DocumentRole;
+  editors?: ClubCreator[];
   images?: PersistedImage[];
 };
 
@@ -155,11 +181,11 @@ export type PersistedShareOutcome =
 
 export type StoredDocument = DocumentAvailability & {
   id: string;
-  editId: string;
   title: string;
   markdown: string;
   createdAt?: Date;
   updatedAt: Date;
+  ownerUserId?: string;
 };
 
 /**
@@ -182,18 +208,20 @@ export type RemovableDocument = DocumentAvailability & {
 };
 
 export interface DocumentPersistence {
-  save(document: StoredDocument): Promise<'published' | 'not-configured'>;
-  // The editId is back on upload: stamping retention on the stored file needs the document
-  // capability, so unlike before it is a parameter the store genuinely uses.
-  uploadImage(documentId: string, image: PendingDocumentImage, editId: string, expiresAt: Date): Promise<'uploaded' | 'not-configured'>;
-  removeImages(documentId: string, imageIds: string[], editId: string): Promise<void>;
+  save(document: StoredDocument): Promise<'published' | 'not-configured' | 'forbidden'>;
+  uploadImage(documentId: string, image: PendingDocumentImage, expiresAt: Date): Promise<'uploaded' | 'not-configured'>;
+  removeImages(documentId: string, imageIds: string[]): Promise<void>;
   listImages(documentId: string): Promise<StoredImage[]>;
   // Reads are live and therefore hook-shaped. The query itself, its rule parameters, and
   // its wire types stay in the adapter; callers only ever see a PersistedShareOutcome.
   useShareDocument(id: string): PersistedShareOutcome;
-  useEditDocument(editId: string): PersistedShareOutcome;
-  markDeleted(id: string, editId: string, deletedAt: Date): Promise<'deleted' | 'not-configured'>;
-  rotateEditId(id: string, editId: string, nextEditId: string): Promise<'rotated' | 'not-configured'>;
+  useEditDocument(id: string, userId: string | null): PersistedShareOutcome;
+  useCreatorLibrary(userId: string | null): CreatorLibrary;
+  useClubCreators(userId: string | null): ClubCreator[];
+  markDeleted(id: string, deletedAt: Date): Promise<'deleted' | 'not-configured' | 'forbidden'>;
+  grantEditor(id: string, editorUserId: string): Promise<'granted' | 'not-configured' | 'forbidden'>;
+  revokeEditor(id: string, editorUserId: string): Promise<'revoked' | 'not-configured' | 'forbidden'>;
+  findCreatorUserId(email: string): Promise<string | null>;
 }
 
 /** Admin-side removal. A browser cannot delete `$files`, so this is a second seam, not a second copy. */
@@ -203,14 +231,17 @@ export interface DocumentRemovalStore {
 
 export interface DocumentLifecycle {
   attachImage(file: ImageInput, currentImageCount: number): AttachImageOutcome;
-  save(markdown: string, existing?: EditCapability, options?: SaveDocumentOptions): Promise<SaveDocumentOutcome>;
+  save(markdown: string, existing?: DocumentHandle, options?: SaveDocumentOptions, ownerUserId?: string): Promise<SaveDocumentOutcome>;
   useShareDocument(id: string): ShareDocumentOutcome;
-  useEditDocument(editId: string): EditDocumentOutcome;
-  rotate(existing: EditCapability): Promise<RotateDocumentOutcome>;
-  delete(existing: EditCapability): Promise<DeleteDocumentOutcome>;
+  useEditDocument(id: string, userId: string | null): EditDocumentOutcome;
+  useCreatorLibrary(userId: string | null): CreatorLibrary;
+  useClubCreators(userId: string | null): ClubCreator[];
+  grantEditor(existing: DocumentHandle, email: string): Promise<GrantEditorOutcome>;
+  revokeEditor(existing: DocumentHandle, editorUserId: string): Promise<GrantEditorOutcome>;
+  delete(existing: DocumentHandle): Promise<DeleteDocumentOutcome>;
 }
 
-function isDocumentUnavailable(document: DocumentAvailability, at: Date): boolean {
+export function isDocumentUnavailable(document: DocumentAvailability, at: Date): boolean {
   if (document.deletedAt) return true;
   return document.expiresAt != null && document.expiresAt.getTime() <= at.getTime();
 }
@@ -245,7 +276,7 @@ export function createDocumentLifecycle(
   abuseLimits: AbuseLimits = { create: CREATE_DOCUMENT_LIMIT, upload: UPLOAD_IMAGE_LIMIT },
   abuseStore: AbuseStore = createMemoryAbuseStore(),
 ): DocumentLifecycle {
-  const recordPublishedAbuse = (existing: EditCapability | undefined, imageCount: number, at: number) => {
+  const recordPublishedAbuse = (existing: DocumentHandle | undefined, imageCount: number, at: number) => {
     if (!existing) {
       const createTimes = abuseStore.load(ABUSE_CREATE_KEY);
       pruneWindow(createTimes, abuseLimits.create.windowMs, at);
@@ -264,7 +295,7 @@ export function createDocumentLifecycle(
     attachImage(file, currentImageCount) {
       return attachDocumentImage(file, currentImageCount, generateId);
     },
-    async save(markdown, existing, options) {
+    async save(markdown, existing, options, ownerUserId) {
       const timestamp = now();
       const at = timestamp.getTime();
       const storedImages = existing ? await persistence.listImages(existing.id) : [];
@@ -299,11 +330,10 @@ export function createDocumentLifecycle(
       const expiresAt = options && 'expiresAt' in options ? options.expiresAt : undefined;
       const document = {
         id,
-        editId: existing?.editId ?? generateId(),
         title: interpreted.title,
         markdown: workingMarkdown,
         updatedAt: timestamp,
-        ...(existing ? {} : { createdAt: timestamp }),
+        ...(existing ? {} : { createdAt: timestamp, ownerUserId }),
         ...(expiresAt !== undefined ? { expiresAt } : {}),
       };
 
@@ -311,7 +341,7 @@ export function createDocumentLifecycle(
       const discardUploaded = async () => {
         if (!uploadedIds.length) return;
         try {
-          await persistence.removeImages(id, uploadedIds, document.editId);
+          await persistence.removeImages(id, uploadedIds);
         } catch {
           // Compensation is best-effort; document cleanup still removes leftovers.
         }
@@ -319,7 +349,7 @@ export function createDocumentLifecycle(
 
       try {
         for (const image of uploads) {
-          const uploaded = await persistence.uploadImage(id, image, document.editId, imageExpiresAt(timestamp));
+          const uploaded = await persistence.uploadImage(id, image, imageExpiresAt(timestamp));
           if (uploaded === 'not-configured') {
             await discardUploaded();
             return { kind: 'not-configured' };
@@ -331,9 +361,13 @@ export function createDocumentLifecycle(
           await discardUploaded();
           return { kind: 'not-configured' };
         }
+        if (result === 'forbidden') {
+          await discardUploaded();
+          return { kind: 'forbidden' };
+        }
         if (unreferenced.length) {
           try {
-            await persistence.removeImages(id, unreferenced, document.editId);
+            await persistence.removeImages(id, unreferenced);
           } catch {
             // Leftover files are cleanup's work. The rewritten document already published.
           }
@@ -343,7 +377,6 @@ export function createDocumentLifecycle(
           kind: 'published',
           document: {
             id: document.id,
-            editId: document.editId,
             title: document.title,
             markdown: document.markdown,
             ...(expiresAt ? { expiresAt } : {}),
@@ -357,29 +390,51 @@ export function createDocumentLifecycle(
     useShareDocument(id) {
       return toShareOutcome(persistence.useShareDocument(id), now());
     },
-    useEditDocument(editId) {
-      const outcome = toShareOutcome(persistence.useEditDocument(editId), now());
-      if (!editId) return { kind: 'unavailable' };
-      if (outcome.kind !== 'available') return outcome;
+    useEditDocument(id, userId) {
+      if (!id || !userId) return { kind: 'unavailable' };
+      const persisted = persistence.useEditDocument(id, userId);
+      const outcome = toShareOutcome(persisted, now());
+      if (outcome.kind !== 'available' || persisted.kind !== 'available' || !persisted.document.role) {
+        return { kind: outcome.kind === 'loading' ? 'loading' : 'unavailable' };
+      }
       return {
         kind: 'available',
-        document: { ...outcome.document, editId },
+        document: { ...outcome.document, role: persisted.document.role, editors: persisted.document.editors ?? [] },
       };
     },
-    async rotate(existing) {
+    useCreatorLibrary(userId) {
+      return persistence.useCreatorLibrary(userId);
+    },
+    useClubCreators(userId) {
+      return persistence.useClubCreators(userId);
+    },
+    async grantEditor(existing, email) {
       try {
-        const nextEditId = generateId();
-        const result = await persistence.rotateEditId(existing.id, existing.editId, nextEditId);
+        const editorUserId = await persistence.findCreatorUserId(email);
+        if (!editorUserId) return { kind: 'unknown' };
+        const result = await persistence.grantEditor(existing.id, editorUserId);
         if (result === 'not-configured') return { kind: 'not-configured' };
-        return { kind: 'rotated', document: { id: existing.id, editId: nextEditId } };
+        if (result === 'forbidden') return { kind: 'forbidden' };
+        return { kind: 'granted' };
+      } catch {
+        return { kind: 'failed' };
+      }
+    },
+    async revokeEditor(existing, editorUserId) {
+      try {
+        const result = await persistence.revokeEditor(existing.id, editorUserId);
+        if (result === 'not-configured') return { kind: 'not-configured' };
+        if (result === 'forbidden') return { kind: 'forbidden' };
+        return { kind: 'revoked' };
       } catch {
         return { kind: 'failed' };
       }
     },
     async delete(existing) {
       try {
-        const result = await persistence.markDeleted(existing.id, existing.editId, now());
+        const result = await persistence.markDeleted(existing.id, now());
         if (result === 'not-configured') return { kind: 'not-configured' };
+        if (result === 'forbidden') return { kind: 'forbidden' };
         return { kind: 'deleted' };
       } catch {
         return { kind: 'failed' };

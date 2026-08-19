@@ -37,6 +37,8 @@ vi.mock('./lib/instant-document-persistence', () => ({
         }
         : { kind: 'unavailable' }
     ),
+    useEditDocument: () => ({ kind: 'unavailable' }),
+    useCreatorLibrary: () => ({ loading: false, owned: [], granted: [] }),
   },
 }));
 

@@ -1,4 +1,6 @@
 import type {
+  ClubCreator,
+  CreatorLibrary,
   DocumentPersistence,
   DocumentRemovalStore,
   PersistedDocument,
@@ -7,15 +9,18 @@ import type {
 } from '../document-lifecycle';
 
 export type MemoryDocumentStore = DocumentPersistence & DocumentRemovalStore & {
-  documents: Map<string, StoredDocument>;
+  documents: Map<string, StoredDocument & { editorUserIds?: string[] }>;
   images: Map<string, string[]>;
   imageUrls: Map<string, string>;
   imageExpiry: Map<string, Date>;
+  creators: Map<string, string>;
   /** While true every read answers `loading`, the way a live query does before it settles. */
   pending: boolean;
-  addDocument(document: StoredDocument): void;
+  addDocument(document: StoredDocument & { editorUserIds?: string[] }): void;
   addImage(documentId: string, imageId: string, url?: string, expiresAt?: Date): void;
 };
+
+type StoredMemoryDocument = StoredDocument & { editorUserIds?: string[] };
 
 /**
  * The test adapter behind both seams. Production splits them across two Instant SDKs;
@@ -25,10 +30,11 @@ export type MemoryDocumentStore = DocumentPersistence & DocumentRemovalStore & {
 export function createMemoryDocumentStore(
   imageUrl: (imageId: string) => string = (imageId) => `memory://${imageId}`,
 ): MemoryDocumentStore {
-  const documents = new Map<string, StoredDocument>();
+  const documents = new Map<string, StoredMemoryDocument>();
   const images = new Map<string, string[]>();
   const imageUrls = new Map<string, string>();
   const imageExpiry = new Map<string, Date>();
+  const creators = new Map<string, string>();
   const state = { pending: false };
 
   const imagesOf = (documentId: string) => (images.get(documentId) ?? []).map((id) => ({
@@ -43,7 +49,20 @@ export function createMemoryDocumentStore(
     }
   };
 
-  const read = (document: StoredDocument | undefined) => {
+  const roleFor = (document: StoredMemoryDocument, userId: string) => {
+    if (document.ownerUserId === userId) return 'owner' as const;
+    if ((document.editorUserIds ?? []).includes(userId)) return 'editor' as const;
+    return undefined;
+  };
+
+  const editorsOf = (document: StoredMemoryDocument): ClubCreator[] => (
+    (document.editorUserIds ?? []).flatMap((editorUserId) => {
+      const email = [...creators.entries()].find(([, storedId]) => storedId === editorUserId)?.[0];
+      return email ? [{ userId: editorUserId, email }] : [];
+    })
+  );
+
+  const read = (document: StoredMemoryDocument | undefined, userId?: string | null) => {
     if (state.pending) return { kind: 'loading' as const };
     if (!document) return { kind: 'unavailable' as const };
     const persisted: PersistedDocument = {
@@ -58,7 +77,23 @@ export function createMemoryDocumentStore(
         expiresAt: imageExpiry.get(id) ?? null,
       })),
     };
+    if (userId) {
+      const role = roleFor(document, userId);
+      if (!role) return { kind: 'unavailable' as const };
+      persisted.role = role;
+      persisted.editors = editorsOf(document);
+    }
     return { kind: 'available' as const, document: persisted };
+  };
+
+  const library = (userId: string | null): CreatorLibrary => {
+    if (!userId) return { loading: false, owned: [], granted: [] };
+    const items = [...documents.values()].map((document) => ({ id: document.id, title: document.title }));
+    return {
+      loading: false,
+      owned: items.filter((document) => documents.get(document.id)?.ownerUserId === userId),
+      granted: items.filter((document) => (documents.get(document.id)?.editorUserIds ?? []).includes(userId)),
+    };
   };
 
   return {
@@ -66,6 +101,7 @@ export function createMemoryDocumentStore(
     images,
     imageUrls,
     imageExpiry,
+    creators,
     get pending() { return state.pending; },
     set pending(value: boolean) { state.pending = value; },
     addDocument(document) {
@@ -80,7 +116,7 @@ export function createMemoryDocumentStore(
       documents.set(document.id, { ...documents.get(document.id), ...document });
       return 'published';
     },
-    async uploadImage(documentId, image, _editId, expiresAt) {
+    async uploadImage(documentId, image, expiresAt) {
       images.set(documentId, [...(images.get(documentId) ?? []), image.id]);
       imageUrls.set(image.id, imageUrl(image.id));
       imageExpiry.set(image.id, expiresAt);
@@ -98,20 +134,33 @@ export function createMemoryDocumentStore(
     useShareDocument(id) {
       return read(documents.get(id));
     },
-    useEditDocument(editId) {
-      return read([...documents.values()].find((candidate) => candidate.editId === editId));
+    useEditDocument(id, userId) {
+      return read(documents.get(id), userId);
     },
-    async markDeleted(id, editId, deletedAt) {
+    useCreatorLibrary: library,
+    useClubCreators() {
+      return [...creators.entries()].map(([email, userId]) => ({ userId, email }));
+    },
+    async markDeleted(id, deletedAt) {
       const document = documents.get(id);
-      if (!document || document.editId !== editId) throw new Error('not allowed');
+      if (!document) throw new Error('not allowed');
       documents.set(id, { ...document, deletedAt });
       return 'deleted';
     },
-    async rotateEditId(id, editId, nextEditId) {
+    async grantEditor(id, editorUserId) {
       const document = documents.get(id);
-      if (!document || document.editId !== editId) throw new Error('not allowed');
-      documents.set(id, { ...document, editId: nextEditId });
-      return 'rotated';
+      if (!document) return 'forbidden';
+      documents.set(id, { ...document, editorUserIds: [...new Set([...(document.editorUserIds ?? []), editorUserId])] });
+      return 'granted';
+    },
+    async revokeEditor(id, editorUserId) {
+      const document = documents.get(id);
+      if (!document) return 'forbidden';
+      documents.set(id, { ...document, editorUserIds: (document.editorUserIds ?? []).filter((candidate) => candidate !== editorUserId) });
+      return 'revoked';
+    },
+    async findCreatorUserId(email) {
+      return creators.get(email) ?? null;
     },
     async listDocuments(): Promise<RemovableDocument[]> {
       return [...documents.values()].map((document) => ({
@@ -131,7 +180,6 @@ export function createMemoryDocumentStore(
           if (remaining.length) images.set(document.id, remaining);
           else images.delete(document.id);
           forget(imageIds);
-          // Read the markdown held now, not the copy listed at the start of the run.
           const stored = documents.get(document.id);
           if (stored) documents.set(document.id, { ...stored, markdown: rewriteMarkdown(stored.markdown) });
         },

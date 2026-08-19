@@ -1,9 +1,9 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const documents = vi.hoisted(() => new Map<string, { id: string; editId: string; title: string; markdown: string }>());
-const publishDocument = vi.hoisted(() => vi.fn(async (markdown: string, existing?: { id: string; editId: string }): Promise<{ kind: 'published'; document: { id: string; editId: string; title: string; markdown: string } } | { kind: 'failed' } | { kind: 'rate-limited'; limit: 'create' | 'upload' }> => {
-  const document = { id: existing?.id ?? 'saved-document', editId: existing?.editId ?? 'private-edit-capability', title: 'Saved document', markdown };
+const documents = vi.hoisted(() => new Map<string, { id: string; title: string; markdown: string; role?: 'owner' | 'editor'; editors?: Array<{ userId: string; email: string }> }>());
+const publishDocument = vi.hoisted(() => vi.fn(async (markdown: string, existing?: { id: string }): Promise<{ kind: 'published'; document: { id: string; title: string; markdown: string; role: 'owner'; editors: [] } } | { kind: 'failed' } | { kind: 'rate-limited'; limit: 'create' | 'upload' }> => {
+  const document = { id: existing?.id ?? 'saved-document', title: 'Saved document', markdown, role: 'owner' as const, editors: [] as [] };
   documents.set(document.id, document);
   return { kind: 'published' as const, document };
 }));
@@ -13,20 +13,33 @@ vi.mock('./lib/instant-document-persistence', () => ({
     attachImage: () => ({ kind: 'unsupported' as const }),
     save: publishDocument,
     delete: vi.fn(async () => ({ kind: 'deleted' as const })),
-    rotate: vi.fn(async (existing: { id: string; editId: string }) => ({ kind: 'rotated' as const, document: { id: existing.id, editId: 'replacement-edit-capability' } })),
+    grantEditor: vi.fn(async () => ({ kind: 'unknown' as const })),
+    revokeEditor: vi.fn(async () => ({ kind: 'revoked' as const })),
+    useCreatorLibrary: () => ({ loading: false, owned: [], granted: [] }),
+    useClubCreators: () => [],
     useShareDocument: (id: string) => {
       const document = documents.get(id);
       return document ? { kind: 'available', document: { id: document.id, title: document.title, markdown: document.markdown } } : { kind: 'unavailable' };
     },
-    useEditDocument: (editId: string) => {
-      if (!editId) return { kind: 'unavailable' };
-      const document = [...documents.values()].find((candidate) => candidate.editId === editId);
-      return document ? { kind: 'available', document } : { kind: 'unavailable' };
+    useEditDocument: (id: string, userId: string | null) => {
+      if (!id || !userId) return { kind: 'unavailable' };
+      const document = documents.get(id);
+      return document ? { kind: 'available', document: { ...document, role: document.role ?? 'owner', editors: document.editors ?? [] } } : { kind: 'unavailable' };
     },
   },
 }));
 
 import { App } from './App';
+import type { ClubSession } from './club-auth';
+
+const creatorClub: ClubSession = {
+  status: 'signed-in',
+  user: { id: 'creator-1', email: 'writer@example.com' },
+  isCreator: true,
+};
+
+const renderCreatorApp = () => render(<App club={creatorClub} />);
+const newDraftKey = 'markshare-editor-recovery-v1:writer@example.com:new';
 
 beforeEach(() => {
   const values = new Map<string, string>();
@@ -53,19 +66,19 @@ afterEach(() => {
 
 describe('editor session', () => {
   it('recovers unpublished work after the editor is reopened', async () => {
-    const first = render(<App />);
+    const first = renderCreatorApp();
     fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Recovered' } });
-    expect(window.localStorage.getItem('markshare-editor-recovery-v1')).toContain('# Recovered');
+    expect(window.localStorage.getItem(newDraftKey)).toContain('# Recovered');
 
     first.unmount();
-    render(<App />);
+    renderCreatorApp();
 
     expect(await screen.findByText('Recovered unsaved local draft.')).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Recovered');
   });
 
   it('imports Markdown and keeps private changes out of the reader until Save changes', async () => {
-    render(<App />);
+    renderCreatorApp();
     const file = Object.assign(new File(['# Imported'], 'notes.md', { type: 'text/markdown' }), { text: async () => '# Imported' });
     fireEvent.change(screen.getByLabelText('Import .md'), { target: { files: [file] } });
 
@@ -82,55 +95,55 @@ describe('editor session', () => {
     expect(await screen.findByRole('heading', { name: 'Imported' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Private revision' })).not.toBeInTheDocument();
 
-    window.history.replaceState({}, '', '/e/private-edit-capability');
+    window.history.replaceState({}, '', '/d/saved-document');
     fireEvent.popState(window);
     expect(await screen.findByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Private revision');
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await screen.findByText('Changes saved.');
-    expect(publishDocument).toHaveBeenLastCalledWith('# Private revision', expect.objectContaining({ id: 'saved-document', editId: 'private-edit-capability' }), { expiresAt: null });
+    expect(publishDocument).toHaveBeenLastCalledWith('# Private revision', expect.objectContaining({ id: 'saved-document' }), { expiresAt: null }, 'creator-1');
     fireEvent.click(screen.getByRole('button', { name: /open share link/i }));
     expect(await screen.findByRole('heading', { name: 'Private revision' })).toBeInTheDocument();
   });
 
   it('starts a new document after a clean saved session is reopened', async () => {
-    const first = render(<App />);
+    const first = renderCreatorApp();
     fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Original' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await screen.findByText('Changes saved.');
 
     first.unmount();
     window.history.replaceState({}, '', '/new');
-    render(<App />);
+    renderCreatorApp();
     expect(screen.getByRole('textbox', { name: 'Markdown document' })).toHaveValue('');
     fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Separate' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await screen.findByText('Changes saved.');
 
-    expect(publishDocument).toHaveBeenLastCalledWith('# Separate', undefined, { expiresAt: null });
+    expect(publishDocument).toHaveBeenLastCalledWith('# Separate', undefined, { expiresAt: null }, 'creator-1');
   });
 
-  it('keeps an unsaved new-document draft after a different edit link is opened', async () => {
-    const first = render(<App />);
+  it('keeps an unsaved new-document draft after a different document is opened', async () => {
+    const first = renderCreatorApp();
     fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Unsaved new draft' } });
-    expect(window.localStorage.getItem('markshare-editor-recovery-v1')).toContain('# Unsaved new draft');
+    expect(window.localStorage.getItem(newDraftKey)).toContain('# Unsaved new draft');
     first.unmount();
 
-    documents.set('other-document', { id: 'other-document', editId: 'other-edit-capability', title: 'Other notes', markdown: '# Other notes' });
-    window.history.replaceState({}, '', '/e/other-edit-capability');
-    const second = render(<App />);
+    documents.set('other-document', { id: 'other-document', title: 'Other notes', markdown: '# Other notes', role: 'owner', editors: [] });
+    window.history.replaceState({}, '', '/d/other-document');
+    const second = renderCreatorApp();
     expect(await screen.findByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Other notes');
-    expect(window.localStorage.getItem('markshare-editor-recovery-v1')).toContain('# Unsaved new draft');
+    expect(window.localStorage.getItem(newDraftKey)).toContain('# Unsaved new draft');
     second.unmount();
 
     window.history.replaceState({}, '', '/new');
-    render(<App />);
+    renderCreatorApp();
     expect(await screen.findByText('Recovered unsaved local draft.')).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Unsaved new draft');
   });
 
   it('does not rewrite remembered edit access while typing', async () => {
     const setItem = vi.spyOn(window.localStorage, 'setItem');
-    render(<App />);
+    renderCreatorApp();
     fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Access' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await screen.findByText('Changes saved.');
@@ -142,7 +155,7 @@ describe('editor session', () => {
 
   it('clamps, resets, and cleans up the accessible splitter interaction', () => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 100, bottom: 0, width: 100, height: 0, toJSON: () => ({}) });
-    render(<App />);
+    renderCreatorApp();
     const splitter = screen.getByRole('separator', { name: 'Resize the write and preview panes' });
 
     fireEvent.pointerDown(splitter, { pointerId: 1 });
@@ -162,7 +175,7 @@ describe('editor session', () => {
 
   it('keeps editing available after a save failure and retries on the next explicit save', async () => {
     publishDocument.mockRejectedValueOnce(new Error('network unavailable'));
-    render(<App />);
+    renderCreatorApp();
     fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Retry me' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
@@ -180,16 +193,16 @@ describe('editor session', () => {
 
   it('explains when creation is rate-limited and keeps the draft', async () => {
     publishDocument.mockResolvedValueOnce({ kind: 'rate-limited', limit: 'create' });
-    render(<App />);
+    renderCreatorApp();
     fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Too many' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
-    expect(await screen.findByRole('alertdialog')).toHaveTextContent('This browser has created too many documents in the last hour. Please try again later.');
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('This signed-in creator has created too many documents in the last hour. Please try again later.');
     expect(screen.getByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Too many');
   });
 
   it('shows an import-specific error when a file cannot be read', async () => {
-    render(<App />);
+    renderCreatorApp();
     const file = Object.assign(new File([''], 'broken.md', { type: 'text/markdown' }), { text: () => Promise.reject(new Error('unreadable')) });
     fireEvent.change(screen.getByLabelText('Import .md'), { target: { files: [file] } });
 
@@ -198,7 +211,7 @@ describe('editor session', () => {
   });
 
   it('switches between the edit and preview tabs without replacing the draft', () => {
-    render(<App />);
+    renderCreatorApp();
     fireEvent.change(screen.getByRole('textbox', { name: 'Markdown document' }), { target: { value: '# Tabs' } });
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
 
