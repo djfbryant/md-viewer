@@ -391,7 +391,6 @@ export function createDocumentLifecycle(
       return toShareOutcome(persistence.useShareDocument(id), now());
     },
     useEditDocument(id, userId) {
-      if (!id || !userId) return { kind: 'unavailable' };
       const persisted = persistence.useEditDocument(id, userId);
       const outcome = toShareOutcome(persisted, now());
       if (outcome.kind !== 'available' || persisted.kind !== 'available' || !persisted.document.role) {

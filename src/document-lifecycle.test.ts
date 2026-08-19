@@ -342,6 +342,24 @@ describe('Document lifecycle', () => {
     expect(lifecycle.useEditDocument('', 'owner-user')).toEqual(unavailable);
   });
 
+  it('always asks the store for an edit document so hook-shaped adapters can skip with null', () => {
+    const useEditDocument = vi.fn(() => unavailable);
+    const lifecycle = createDocumentLifecycle({
+      save: async () => 'published',
+      uploadImage: async () => 'uploaded',
+      removeImages: async () => undefined,
+      listImages: async () => [],
+      useShareDocument: () => unavailable,
+      useEditDocument,
+      markDeleted: async () => 'deleted',
+      ...unusedPersistence,
+    } satisfies DocumentPersistence, () => 'opaque-document-id');
+
+    expect(lifecycle.useEditDocument('', 'owner-user')).toEqual(unavailable);
+    expect(lifecycle.useEditDocument('opaque-document-id', null)).toEqual(unavailable);
+    expect(useEditDocument).toHaveBeenCalledTimes(2);
+  });
+
   it('attaches a supported image as a document-scoped markdown reference', () => {
     const lifecycle = createDocumentLifecycle(createMemoryDocumentStore(), () => 'pasted-image');
 

@@ -129,21 +129,23 @@ const instantDocumentPersistence: DocumentPersistence = {
   },
 
   useEditDocument(id, userId): PersistedShareOutcome {
-    if (!db || !userId) return { kind: 'unavailable' };
+    if (!db) return { kind: 'unavailable' };
 
-    const documentQuery = db.useQuery({
-      documents: { $: { where: { id } }, owner: {}, editors: {} },
-    });
+    const documentQuery = db.useQuery(
+      id && userId
+        ? { documents: { $: { where: { id } }, owner: {}, editors: {} } }
+        : null,
+    );
     const document = documentQuery.data?.documents[0] as InstantDocument | undefined;
-    const role = document ? roleFor(document, userId) : undefined;
+    const role = userId && document ? roleFor(document, userId) : undefined;
     const filesQuery = db.useQuery(
       document?.id
         ? { $files: { $: { where: { path: { $like: `${documentImagePrefix(document.id)}%` } } } } }
         : null,
-      { ruleParams: { knownDocumentId: document?.id } },
+      document?.id ? { ruleParams: { knownDocumentId: document.id } } : undefined,
     );
 
-    if (!id) return { kind: 'unavailable' };
+    if (!id || !userId) return { kind: 'unavailable' };
     if (documentQuery.isLoading || (document && filesQuery.isLoading)) return { kind: 'loading' };
     return documentQuery.error || !document || !role
       ? { kind: 'unavailable' }
@@ -158,9 +160,10 @@ const instantDocumentPersistence: DocumentPersistence = {
   },
 
   useCreatorLibrary(userId): CreatorLibrary {
-    if (!db || !userId) return emptyLibrary;
-    const ownedQuery = db.useQuery({ documents: { $: { where: { 'owner.id': userId } } } });
-    const grantedQuery = db.useQuery({ documents: { $: { where: { 'editors.id': userId } } } });
+    if (!db) return emptyLibrary;
+    const ownedQuery = db.useQuery(userId ? { documents: { $: { where: { 'owner.id': userId } } } } : null);
+    const grantedQuery = db.useQuery(userId ? { documents: { $: { where: { 'editors.id': userId } } } } : null);
+    if (!userId) return emptyLibrary;
     const at = new Date();
     const visible = (documents: InstantDocument[] | undefined) => (
       (documents ?? []).filter((document) => !isDocumentUnavailable(instantAvailability(document), at)).map((document) => ({
@@ -176,8 +179,9 @@ const instantDocumentPersistence: DocumentPersistence = {
   },
 
   useClubCreators(userId): ClubCreator[] {
-    if (!db || !userId) return [];
-    const { data } = db.useQuery({ creators: { user: {} } });
+    if (!db) return [];
+    const { data } = db.useQuery(userId ? { creators: { user: {} } } : null);
+    if (!userId) return [];
     return (data?.creators ?? []).flatMap((creator: { email: string; user?: InstantUser | InstantUser[] | null }) => {
       const user = asUser(creator.user);
       return user?.id ? [{ userId: user.id, email: creator.email }] : [];
