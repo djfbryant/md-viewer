@@ -88,7 +88,13 @@ export function createMemoryDocumentStore(
 
   const library = (userId: string | null): CreatorLibrary => {
     if (!userId) return { loading: false, owned: [], granted: [] };
-    const items = [...documents.values()].map((document) => ({ id: document.id, title: document.title }));
+    // Availability travels with each entry; the lifecycle owns when entries leave the list.
+    const items = [...documents.values()].map((document) => ({
+      id: document.id,
+      title: document.title,
+      expiresAt: document.expiresAt ?? null,
+      deletedAt: document.deletedAt ?? null,
+    }));
     return {
       loading: false,
       owned: items.filter((document) => documents.get(document.id)?.ownerUserId === userId),

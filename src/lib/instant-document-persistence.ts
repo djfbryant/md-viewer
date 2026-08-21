@@ -1,18 +1,20 @@
 import { lookup } from '@instantdb/react';
-import { documentImagePath, documentImagePrefix, imageIdFromPath } from '../document-image';
+import { documentImagePath, documentImagePrefix } from '../document-image';
 import {
   createDocumentLifecycle,
   createLocalStorageAbuseStore,
-  isDocumentUnavailable,
   type ClubCreator,
   type CreatorLibrary,
+  type CreatorLibraryEntry,
   type DocumentPersistence,
   type PersistedDocument,
   type PersistedImage,
   type PersistedShareOutcome,
 } from '../document-lifecycle';
-import { instantAvailability, toDate, type InstantDate } from '../instant-wire';
+import { instantAvailability, ownedImageFiles, toDate, type InstantDate } from '../instant-wire';
 import { createDocumentId, db } from './instant';
+
+type Database = NonNullable<typeof db>;
 
 type InstantFile = { id: string; path?: string | null; url?: string | null; expiresAt?: InstantDate | null };
 type InstantUser = { id: string; email?: string | null };
@@ -26,11 +28,21 @@ type InstantDocument = {
   editors?: InstantUser[] | null;
 };
 
+// Every read and write on a document's files is gated by the perms rule
+// `data.id == ruleParams.knownDocumentId`. Resolving that gate here — once, in these two
+// helpers — keeps Instant's permission model behind the seam instead of threaded through
+// every method.
+const scopedQuery = (documentId: string) => ({ ruleParams: { knownDocumentId: documentId } });
+
+const fileTx = (database: Database, documentId: string, imageId: string) => (
+  database.tx.$files[lookup('path', documentImagePath(documentId, imageId))]
+    .ruleParams({ knownDocumentId: documentId })
+);
+
 function imagesFor(documentId: string, files: InstantFile[] | undefined): PersistedImage[] {
-  return (files ?? []).flatMap((file) => {
-    const id = imageIdFromPath(documentId, file.path ?? '');
-    return id && file.url ? [{ id, url: file.url, expiresAt: toDate(file.expiresAt) }] : [];
-  });
+  return ownedImageFiles<InstantFile>(documentId, files).flatMap(({ imageId, file }) => (
+    file.url ? [{ id: imageId, url: file.url, expiresAt: toDate(file.expiresAt) }] : []
+  ));
 }
 
 function asUser(value: InstantUser | InstantUser[] | null | undefined) {
@@ -82,30 +94,22 @@ const instantDocumentPersistence: DocumentPersistence = {
       contentDisposition: 'inline',
       contentType: image.file.type || 'application/octet-stream',
     });
-    // uploadFile cannot carry attributes, so retention is stamped in a second write.
-    await database.transact(
-      database.tx.$files[lookup('path', path)]
-        .ruleParams({ knownDocumentId: documentId })
-        .update({ expiresAt }),
-    );
+    // Retention is stamped in a second write because uploadFile cannot carry attributes.
+    await database.transact(fileTx(database, documentId, image.id).update({ expiresAt }));
     return 'uploaded';
   },
 
   async removeImages(documentId, imageIds) {
     const database = db;
     if (!database || !imageIds.length) return;
-    await database.transact(imageIds.map((imageId) => (
-      database.tx.$files[lookup('path', documentImagePath(documentId, imageId))]
-        .ruleParams({ knownDocumentId: documentId })
-        .delete()
-    )));
+    await database.transact(imageIds.map((imageId) => fileTx(database, documentId, imageId).delete()));
   },
 
   async listImages(documentId) {
     if (!db) return [];
     const { data } = await db.queryOnce(
       { $files: { $: { where: { path: { $like: `${documentImagePrefix(documentId)}%` } } } } },
-      { ruleParams: { knownDocumentId: documentId } },
+      scopedQuery(documentId),
     );
     return imagesFor(documentId, data.$files).map(({ id, expiresAt }) => ({ id, expiresAt }));
   },
@@ -118,7 +122,7 @@ const instantDocumentPersistence: DocumentPersistence = {
         documents: { $: { where: { id } } },
         $files: { $: { where: { path: { $like: `${documentImagePrefix(id)}%` } } } },
       },
-      { ruleParams: { knownDocumentId: id } },
+      scopedQuery(id),
     );
 
     if (isLoading) return { kind: 'loading' };
@@ -142,7 +146,7 @@ const instantDocumentPersistence: DocumentPersistence = {
       document?.id
         ? { $files: { $: { where: { path: { $like: `${documentImagePrefix(document.id)}%` } } } } }
         : null,
-      document?.id ? { ruleParams: { knownDocumentId: document.id } } : undefined,
+      document?.id ? scopedQuery(document.id) : undefined,
     );
 
     if (!id || !userId) return { kind: 'unavailable' };
@@ -164,17 +168,18 @@ const instantDocumentPersistence: DocumentPersistence = {
     const ownedQuery = db.useQuery(userId ? { documents: { $: { where: { 'owner.id': userId } } } } : null);
     const grantedQuery = db.useQuery(userId ? { documents: { $: { where: { 'editors.id': userId } } } } : null);
     if (!userId) return emptyLibrary;
-    const at = new Date();
-    const visible = (documents: InstantDocument[] | undefined) => (
-      (documents ?? []).filter((document) => !isDocumentUnavailable(instantAvailability(document), at)).map((document) => ({
+    // Availability travels with each entry; the lifecycle owns when entries leave the list.
+    const listed = (documents: InstantDocument[] | undefined): CreatorLibraryEntry[] => (
+      (documents ?? []).map((document) => ({
         id: document.id,
         title: document.title,
+        ...instantAvailability(document),
       }))
     );
     return {
       loading: ownedQuery.isLoading || grantedQuery.isLoading,
-      owned: visible(ownedQuery.data?.documents as InstantDocument[] | undefined),
-      granted: visible(grantedQuery.data?.documents as InstantDocument[] | undefined),
+      owned: listed(ownedQuery.data?.documents as InstantDocument[] | undefined),
+      granted: listed(grantedQuery.data?.documents as InstantDocument[] | undefined),
     };
   },
 

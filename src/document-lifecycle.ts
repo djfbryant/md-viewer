@@ -1,3 +1,4 @@
+import { createContext, useContext, useEffect, useState } from 'react';
 import {
   attachDocumentImage,
   imageExpiresAt,
@@ -31,15 +32,16 @@ export type EditableDocument = SharedDocument & {
 
 export type DocumentHandle = Pick<SharedDocument, 'id'>;
 
-export type CreatorListItem = {
+/** One Document as the library lists it. Availability travels with it so one module can age the list. */
+export type CreatorLibraryEntry = {
   id: string;
   title: string;
-};
+} & DocumentAvailability;
 
 export type CreatorLibrary = {
   loading: boolean;
-  owned: CreatorListItem[];
-  granted: CreatorListItem[];
+  owned: CreatorLibraryEntry[];
+  granted: CreatorLibraryEntry[];
 };
 
 export type ClubCreator = {
@@ -246,6 +248,39 @@ export function isDocumentUnavailable(document: DocumentAvailability, at: Date):
   return document.expiresAt != null && document.expiresAt.getTime() <= at.getTime();
 }
 
+/**
+ * Schedules a re-render when the next availability date passes. The lifecycle owns the
+ * clock so callers never hand-roll expiry timers: an outcome that is available now simply
+ * becomes unavailable at its date, in every component that renders it.
+ */
+function useAvailabilityClock(dates: Array<Date | null | undefined>): void {
+  const [tick, setTick] = useState(0);
+  const scheduleKey = dates.map((date) => date?.getTime() ?? '').join(',');
+  useEffect(() => {
+    const nextWake = dates
+      .filter((date): date is Date => Boolean(date))
+      .map((date) => date.getTime() - Date.now())
+      .filter((delay) => delay > 0)
+      .sort((a, b) => a - b)[0];
+    if (nextWake === undefined) return;
+    const timeout = window.setTimeout(
+      () => setTick((current) => current + 1),
+      Math.min(nextWake, 2_147_483_647),
+    );
+    return () => window.clearTimeout(timeout);
+  }, [scheduleKey, tick]);
+}
+
+const DocumentLifecycleContext = createContext<DocumentLifecycle | null>(null);
+export const DocumentLifecycleProvider = DocumentLifecycleContext.Provider;
+
+/** The one seam between the interface and every caller: production binds the Instant adapter, tests bind memory. */
+export function useDocumentLifecycle(): DocumentLifecycle {
+  const lifecycle = useContext(DocumentLifecycleContext);
+  if (!lifecycle) throw new Error('DocumentLifecycleProvider is missing from the tree.');
+  return lifecycle;
+}
+
 /** An image outlives neither its own retention date nor the document that owns it. */
 export function isImageExpired(expiresAt: Date | null | undefined, at: Date): boolean {
   return expiresAt != null && expiresAt.getTime() <= at.getTime();
@@ -388,10 +423,13 @@ export function createDocumentLifecycle(
       }
     },
     useShareDocument(id) {
-      return toShareOutcome(persistence.useShareDocument(id), now());
+      const persisted = persistence.useShareDocument(id);
+      useAvailabilityClock([persisted.kind === 'available' ? persisted.document.expiresAt : null]);
+      return toShareOutcome(persisted, now());
     },
     useEditDocument(id, userId) {
       const persisted = persistence.useEditDocument(id, userId);
+      useAvailabilityClock([persisted.kind === 'available' ? persisted.document.expiresAt : null]);
       const outcome = toShareOutcome(persisted, now());
       if (outcome.kind !== 'available' || persisted.kind !== 'available' || !persisted.document.role) {
         return { kind: outcome.kind === 'loading' ? 'loading' : 'unavailable' };
@@ -402,7 +440,14 @@ export function createDocumentLifecycle(
       };
     },
     useCreatorLibrary(userId) {
-      return persistence.useCreatorLibrary(userId);
+      const library = persistence.useCreatorLibrary(userId);
+      // The lifecycle owns expiry here too: entries age out of the list on their own dates.
+      useAvailabilityClock([...library.owned, ...library.granted].map((entry) => entry.expiresAt));
+      const at = now();
+      const visible = (entries: CreatorLibraryEntry[]) => (
+        entries.filter((entry) => !isDocumentUnavailable(entry, at)).map(({ id, title }) => ({ id, title }))
+      );
+      return { loading: library.loading, owned: visible(library.owned), granted: visible(library.granted) };
     },
     useClubCreators(userId) {
       return persistence.useClubCreators(userId);

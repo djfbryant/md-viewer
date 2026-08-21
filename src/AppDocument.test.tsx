@@ -1,46 +1,43 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { MemoryDocumentStore } from './test/memory-document-store';
+import { App } from './App';
+import type { ClubSession } from './club-auth';
+import { createDocumentLifecycle } from './document-lifecycle';
+import { createMemoryDocumentStore, type MemoryDocumentStore } from './test/memory-document-store';
 
 /**
  * The ids the lifecycle will hand out next, in the order this test triggers them.
  * Pasting an image asks for an id before Save asks for the document id.
  */
-const nextIds = vi.hoisted(() => ({ queue: [] as string[], generated: 0 }));
+const nextIds = { queue: [] as string[], generated: 0 };
 
-const imageSourceKind = vi.hoisted(() => ({ remote: false }));
+const imageSourceKind = { remote: false };
 
-const persistence = vi.hoisted(() => ({ store: null as unknown as MemoryDocumentStore }));
+const persistence: { store: MemoryDocumentStore } = {
+  store: createMemoryDocumentStore((imageId) => (imageSourceKind.remote
+    ? `https://instant-storage.s3.amazonaws.com/apps/secret/${imageId}.png`
+    : `blob:${imageId}`)),
+};
+
+const generous = { max: 1000, windowMs: 60 * 60 * 1000 };
 
 const mermaidApi = vi.hoisted(() => ({
   initialize: vi.fn(),
   render: vi.fn(async () => ({ svg: '<svg role="img" viewBox="0 0 1804 200"></svg>' })),
 }));
 
-// The real lifecycle over the memory persistence adapter. Only the Instant SDK is replaced,
-// so these tests exercise publish, expiry, deletion, and image upload rules as shipped.
-vi.mock('./lib/instant-document-persistence', async () => {
-  const { createDocumentLifecycle } = await import('./document-lifecycle');
-  const { createMemoryDocumentStore } = await import('./test/memory-document-store');
-  persistence.store = createMemoryDocumentStore((imageId) => (imageSourceKind.remote
-    ? `https://instant-storage.s3.amazonaws.com/apps/secret/${imageId}.png`
-    : `blob:${imageId}`));
-  const generous = { max: 1000, windowMs: 60 * 60 * 1000 };
-  return {
-    documentLifecycle: createDocumentLifecycle(
-      persistence.store,
-      () => nextIds.queue.shift() ?? `generated-id-${nextIds.generated += 1}`,
-      () => new Date(),
-      { create: generous, upload: generous },
-    ),
-  };
-});
-
 vi.mock('mermaid', () => ({ default: mermaidApi }));
 
-import { App } from './App';
-import type { ClubSession } from './club-auth';
+// The real lifecycle over the memory adapter, bound through the same seam production
+// binds Instant through. These tests exercise publish, expiry, deletion, and image
+// upload rules as shipped.
+const testLifecycle = createDocumentLifecycle(
+  persistence.store,
+  () => nextIds.queue.shift() ?? `generated-id-${nextIds.generated += 1}`,
+  () => new Date(),
+  { create: generous, upload: generous },
+);
 
 const store = () => persistence.store;
 
@@ -60,7 +57,7 @@ const creatorClub: ClubSession = {
   isCreator: true,
 };
 
-const renderCreatorApp = () => render(<App club={creatorClub} />);
+const renderCreatorApp = () => render(<App club={creatorClub} lifecycle={testLifecycle} />);
 
 beforeEach(() => {
   const values = new Map<string, string>();
@@ -172,7 +169,7 @@ describe('signed-in creator documents', () => {
   it('does not disclose document content for an unknown share link', () => {
     window.history.replaceState({}, '', '/s/not-a-document');
     document.title = 'Previously viewed secret · MarkShare';
-    render(<App />);
+    render(<App lifecycle={testLifecycle} />);
 
     expect(screen.getByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();
     expect(document.title).toBe('MarkShare');
@@ -350,7 +347,7 @@ describe('signed-in creator documents', () => {
     cleanup();
 
     window.history.replaceState({}, '', '/s/opaque-document-id');
-    render(<App />);
+    render(<App lifecycle={testLifecycle} />);
 
     expect(await screen.findByText('Read only')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
@@ -366,7 +363,7 @@ describe('signed-in creator documents', () => {
       markdown: '# Visitor notes\n\nPublished for a stranger.',
     });
     window.history.replaceState({}, '', `/s/${documentId}`);
-    render(<App />);
+    render(<App lifecycle={testLifecycle} />);
 
     expect(screen.getByRole('heading', { name: 'Visitor notes' })).toBeInTheDocument();
     expect(screen.getByText('Read only')).toBeInTheDocument();
@@ -384,7 +381,7 @@ describe('signed-in creator documents', () => {
       markdown: '# Visitor notes',
     });
     window.history.replaceState({}, '', `/s/${documentId.slice(0, 18)}`);
-    render(<App />);
+    render(<App lifecycle={testLifecycle} />);
 
     expect(screen.getByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();
     expect(screen.getByText('This share link is invalid or the document is no longer available.')).toBeInTheDocument();
@@ -588,7 +585,7 @@ describe('share link appearance', () => {
 
   it('starts a reader with no stored preference on System', () => {
     openShareLink();
-    render(<App />);
+    render(<App lifecycle={testLifecycle} />);
 
     expect(screen.getByRole('heading', { name: 'Visitor notes' })).toBeInTheDocument();
     expect(themeControl()).toHaveAccessibleName('Theme: system. Change theme');
@@ -598,7 +595,7 @@ describe('share link appearance', () => {
 
   it('lets the reader cycle System, Light, and Dark and keeps the choice in that browser', () => {
     openShareLink();
-    render(<App />);
+    render(<App lifecycle={testLifecycle} />);
 
     fireEvent.click(themeControl());
     expect(themeControl()).toHaveAccessibleName('Theme: light. Change theme');
@@ -623,7 +620,7 @@ describe('share link appearance', () => {
 
   it('still shows the reader their choice on the next full page load', () => {
     openShareLink();
-    const first = render(<App />);
+    const first = render(<App lifecycle={testLifecycle} />);
 
     fireEvent.click(themeControl());
     fireEvent.click(themeControl());
@@ -632,7 +629,7 @@ describe('share link appearance', () => {
     // A fresh mount is what a visitor gets when they open the link again.
     first.unmount();
     document.documentElement.removeAttribute('data-theme');
-    render(<App />);
+    render(<App lifecycle={testLifecycle} />);
 
     expect(themeControl()).toHaveAccessibleName('Theme: dark. Change theme');
     expect(document.documentElement.dataset.theme).toBe('dark');
@@ -642,7 +639,7 @@ describe('share link appearance', () => {
   it('follows the OS while the reader stays on System, and stops once they choose', () => {
     const setSystemDark = stubSystemTheme();
     openShareLink();
-    render(<App />);
+    render(<App lifecycle={testLifecycle} />);
 
     expect(document.documentElement.dataset.theme).toBe('light');
     setSystemDark(true);
@@ -661,7 +658,7 @@ describe('share link appearance', () => {
   it('honours a preference the reader stored on an earlier share link', () => {
     window.localStorage.setItem('markshare-theme', 'dark');
     openShareLink();
-    render(<App />);
+    render(<App lifecycle={testLifecycle} />);
 
     expect(themeControl()).toHaveAccessibleName('Theme: dark. Change theme');
     expect(document.documentElement.dataset.theme).toBe('dark');
@@ -670,7 +667,7 @@ describe('share link appearance', () => {
   it('keeps the control on a loading share link', () => {
     store().pending = true;
     openShareLink();
-    render(<App />);
+    render(<App lifecycle={testLifecycle} />);
 
     expect(screen.getByText('Opening document…')).toBeInTheDocument();
     fireEvent.click(themeControl());
@@ -680,7 +677,7 @@ describe('share link appearance', () => {
 
   it('keeps the control on an unavailable share link', () => {
     window.history.replaceState({}, '', '/s/not-a-document');
-    render(<App />);
+    render(<App lifecycle={testLifecycle} />);
 
     expect(screen.getByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();
     fireEvent.click(themeControl());
@@ -695,7 +692,7 @@ describe('share link appearance', () => {
       expiresAt: new Date('2020-01-01T00:00:00Z'),
     });
     window.history.replaceState({}, '', `/s/${shareId}`);
-    render(<App />);
+    render(<App lifecycle={testLifecycle} />);
 
     expect(await screen.findByRole('heading', { name: 'Document unavailable' })).toBeInTheDocument();
     fireEvent.click(themeControl());
@@ -706,7 +703,7 @@ describe('share link appearance', () => {
 
   it('does not let the theme control open an edit path on a live share link', () => {
     openShareLink();
-    render(<App />);
+    render(<App lifecycle={testLifecycle} />);
 
     fireEvent.click(themeControl());
     expect(screen.getByText('Read only')).toBeInTheDocument();

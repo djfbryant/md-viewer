@@ -78,6 +78,7 @@ describe('privacy and abuse deployment', () => {
     expect(privacy).toContain('signed-in creator');
     expect(privacy).toContain('does not reset that budget');
     expect(privacy).toContain('cleanup counts, not document titles or Markdown');
-    expect(acceptableUse).toContain('rate-limited');
+    expect(acceptableUse).toContain('rate-limits bulk creation');
+    expect(acceptableUse).toContain('invitation to be revoked');
   });
 });

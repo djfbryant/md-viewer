@@ -1,0 +1,8 @@
+- generic [active] [ref=e1]:
+  - main [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: MarkShare
+      - 'button "Theme: system. Change theme" [ref=e9] [cursor=pointer]':
+        - generic [ref=e10]: ◐
+    - paragraph [ref=e12]: Opening document…
+  - button [ref=e13] [cursor=pointer]

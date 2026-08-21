@@ -125,7 +125,7 @@ export const infoCopy: Record<InfoPage, InfoCopy> = {
       {
         heading: 'Not fine',
         paragraphs: [
-          'Do not use MarkShare for illegal content, malware, or spam. Do not try to break the service, scrape it, or dump material you do not have the right to publish. Do not treat share links as a content-delivery network for bulk files. Automated bulk creation and image upload will be rate-limited.',
+          'Do not use MarkShare for illegal content, malware, or spam. Do not try to break the service, scrape it, or dump material you do not have the right to publish. Do not treat share links as a content-delivery network for bulk files. The app rate-limits bulk creation per signed-in creator; someone who works around those limits should expect their invitation to be revoked.',
         ],
       },
       {

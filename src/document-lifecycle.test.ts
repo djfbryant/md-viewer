@@ -1,13 +1,46 @@
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, render } from '@testing-library/react';
+import { createElement } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { imageExpiresAt, MAX_IMAGE_BYTES } from './document-image';
 import {
   createDocumentCleanup,
   createDocumentLifecycle,
   createLocalStorageAbuseStore,
   createMemoryAbuseStore,
+  type DocumentLifecycle,
   type DocumentPersistence,
+  type EditDocumentOutcome,
+  type ShareDocumentOutcome,
 } from './document-lifecycle';
 import { createMemoryDocumentStore } from './test/memory-document-store';
+
+/**
+ * The hook-shaped outcomes must be read the way a component reads them: during a render.
+ * A Probe mounts just long enough to capture one outcome.
+ */
+function readShare(lifecycle: DocumentLifecycle, id: string): ShareDocumentOutcome {
+  let outcome!: ShareDocumentOutcome;
+  function Probe() {
+    outcome = lifecycle.useShareDocument(id);
+    return null;
+  }
+  render(createElement(Probe));
+  cleanup();
+  return outcome;
+}
+
+function readEdit(lifecycle: DocumentLifecycle, id: string, userId: string | null): EditDocumentOutcome {
+  let outcome!: EditDocumentOutcome;
+  function Probe() {
+    outcome = lifecycle.useEditDocument(id, userId);
+    return null;
+  }
+  render(createElement(Probe));
+  cleanup();
+  return outcome;
+}
+
+afterEach(cleanup);
 
 const unusedPersistence = {
   useCreatorLibrary: () => ({ loading: false, owned: [], granted: [] }),
@@ -30,7 +63,7 @@ describe('Document lifecycle', () => {
       kind: 'published',
       document: { id: 'opaque-document-id', title: 'Release notes', markdown: '# Release notes\n\nHello **reader**.' },
     });
-    expect(lifecycle.useShareDocument('opaque-document-id')).toEqual({
+    expect(readShare(lifecycle, 'opaque-document-id')).toEqual({
       kind: 'available',
       document: { id: 'opaque-document-id', title: 'Release notes', markdown: '# Release notes\n\nHello **reader**.' },
     });
@@ -38,7 +71,7 @@ describe('Document lifecycle', () => {
 
   it('returns an unavailable outcome for an unknown share ID', () => {
     const lifecycle = createDocumentLifecycle(createMemoryDocumentStore(), () => 'opaque-document-id');
-    expect(lifecycle.useShareDocument('unknown')).toEqual(unavailable);
+    expect(readShare(lifecycle, 'unknown')).toEqual(unavailable);
   });
 
   it('rate-limits public creation and image upload without publishing', async () => {
@@ -185,7 +218,7 @@ describe('Document lifecycle', () => {
     const revised = await lifecycle.save('# Revised version', first.document);
 
     expect(revised).toMatchObject({ kind: 'published', document: { id: 'opaque-document-id', markdown: '# Revised version' } });
-    expect(lifecycle.useShareDocument('opaque-document-id')).toEqual({
+    expect(readShare(lifecycle, 'opaque-document-id')).toEqual({
       kind: 'available',
       document: { id: 'opaque-document-id', title: 'Revised version', markdown: '# Revised version' },
     });
@@ -201,7 +234,7 @@ describe('Document lifecycle', () => {
     await lifecycle.save('# Lasts forever');
 
     now = new Date('2027-08-13T12:00:00.000Z');
-    expect(lifecycle.useShareDocument('opaque-document-id')).toMatchObject({
+    expect(readShare(lifecycle, 'opaque-document-id')).toMatchObject({
       kind: 'available',
       document: { id: 'opaque-document-id', markdown: '# Lasts forever' },
     });
@@ -215,13 +248,13 @@ describe('Document lifecycle', () => {
     await lifecycle.save('# Timed notes', undefined, { expiresAt: expiry });
 
     now = new Date(expiry.getTime() - 1);
-    expect(lifecycle.useShareDocument('opaque-document-id')).toEqual({
+    expect(readShare(lifecycle, 'opaque-document-id')).toEqual({
       kind: 'available',
       document: { id: 'opaque-document-id', title: 'Timed notes', markdown: '# Timed notes', expiresAt: expiry },
     });
 
     now = new Date(expiry.getTime());
-    expect(lifecycle.useShareDocument('opaque-document-id')).toEqual(unavailable);
+    expect(readShare(lifecycle, 'opaque-document-id')).toEqual(unavailable);
   });
 
   it('keeps a configured expiry when a later save omits it', async () => {
@@ -236,7 +269,7 @@ describe('Document lifecycle', () => {
     await lifecycle.save('# Timed notes\n\nStill timed.', first.document);
 
     expect(store.documents.get('opaque-document-id')?.expiresAt).toEqual(expiry);
-    expect(lifecycle.useShareDocument('opaque-document-id')).toMatchObject({
+    expect(readShare(lifecycle, 'opaque-document-id')).toMatchObject({
       kind: 'available',
       document: { markdown: '# Timed notes\n\nStill timed.', expiresAt: expiry },
     });
@@ -256,9 +289,9 @@ describe('Document lifecycle', () => {
     await lifecycle.delete(deleted.document);
     now = expiry;
 
-    expect(lifecycle.useShareDocument('missing-id')).toEqual(unavailable);
-    expect(lifecycle.useShareDocument(expired.document.id)).toEqual(unavailable);
-    expect(lifecycle.useShareDocument(deleted.document.id)).toEqual(unavailable);
+    expect(readShare(lifecycle, 'missing-id')).toEqual(unavailable);
+    expect(readShare(lifecycle, expired.document.id)).toEqual(unavailable);
+    expect(readShare(lifecycle, deleted.document.id)).toEqual(unavailable);
   });
 
   it('removes expired documents and their images through the shared cleanup path', async () => {
@@ -277,15 +310,15 @@ describe('Document lifecycle', () => {
     store.addImage(expired.document.id, 'drop-image-2');
 
     now = expiry;
-    expect(lifecycle.useShareDocument(expired.document.id)).toEqual(unavailable);
+    expect(readShare(lifecycle, expired.document.id)).toEqual(unavailable);
 
     await expect(cleanup()).resolves.toEqual({
       kind: 'cleaned',
       removed: [{ documentId: expired.document.id, imageCount: 2 }],
       expiredImages: [],
     });
-    expect(lifecycle.useShareDocument(kept.document.id)).toMatchObject({ kind: 'available', document: { id: kept.document.id } });
-    expect(lifecycle.useShareDocument(expired.document.id)).toEqual(unavailable);
+    expect(readShare(lifecycle, kept.document.id)).toMatchObject({ kind: 'available', document: { id: kept.document.id } });
+    expect(readShare(lifecycle, expired.document.id)).toEqual(unavailable);
     expect(store.images.get(kept.document.id)).toEqual(['keep-image']);
     expect(store.images.has(expired.document.id)).toBe(false);
     expect(store.documents.has(expired.document.id)).toBe(false);
@@ -305,7 +338,7 @@ describe('Document lifecycle', () => {
     store.addImage(published.document.id, 'pasted-image');
 
     await expect(lifecycle.delete(published.document)).resolves.toEqual({ kind: 'deleted' });
-    expect(lifecycle.useShareDocument(published.document.id)).toEqual(unavailable);
+    expect(readShare(lifecycle, published.document.id)).toEqual(unavailable);
     expect(store.documents.has(published.document.id)).toBe(true);
     expect(store.images.get(published.document.id)).toEqual(['pasted-image']);
 
@@ -314,7 +347,7 @@ describe('Document lifecycle', () => {
       removed: [{ documentId: published.document.id, imageCount: 1 }],
       expiredImages: [],
     });
-    expect(lifecycle.useShareDocument(published.document.id)).toEqual(unavailable);
+    expect(readShare(lifecycle, published.document.id)).toEqual(unavailable);
     expect(store.documents.has(published.document.id)).toBe(false);
     expect(store.images.has(published.document.id)).toBe(false);
   });
@@ -323,7 +356,7 @@ describe('Document lifecycle', () => {
     const lifecycle = createDocumentLifecycle(createMemoryDocumentStore(), () => 'opaque-document-id');
     await lifecycle.save('# Release notes\n\nHello **reader**.', undefined, undefined, 'owner-user');
 
-    expect(lifecycle.useEditDocument('opaque-document-id', 'owner-user')).toEqual({
+    expect(readEdit(lifecycle, 'opaque-document-id', 'owner-user')).toEqual({
       kind: 'available',
       document: {
         id: 'opaque-document-id',
@@ -333,13 +366,13 @@ describe('Document lifecycle', () => {
         editors: [],
       },
     });
-    expect(lifecycle.useShareDocument('opaque-document-id')).toEqual({
+    expect(readShare(lifecycle, 'opaque-document-id')).toEqual({
       kind: 'available',
       document: { id: 'opaque-document-id', title: 'Release notes', markdown: '# Release notes\n\nHello **reader**.' },
     });
-    expect(lifecycle.useEditDocument('opaque-document-id', 'stranger-user')).toEqual(unavailable);
-    expect(lifecycle.useEditDocument('opaque-document-id', null)).toEqual(unavailable);
-    expect(lifecycle.useEditDocument('', 'owner-user')).toEqual(unavailable);
+    expect(readEdit(lifecycle, 'opaque-document-id', 'stranger-user')).toEqual(unavailable);
+    expect(readEdit(lifecycle, 'opaque-document-id', null)).toEqual(unavailable);
+    expect(readEdit(lifecycle, '', 'owner-user')).toEqual(unavailable);
   });
 
   it('always asks the store for an edit document so hook-shaped adapters can skip with null', () => {
@@ -355,8 +388,8 @@ describe('Document lifecycle', () => {
       ...unusedPersistence,
     } satisfies DocumentPersistence, () => 'opaque-document-id');
 
-    expect(lifecycle.useEditDocument('', 'owner-user')).toEqual(unavailable);
-    expect(lifecycle.useEditDocument('opaque-document-id', null)).toEqual(unavailable);
+    expect(readEdit(lifecycle, '', 'owner-user')).toEqual(unavailable);
+    expect(readEdit(lifecycle, 'opaque-document-id', null)).toEqual(unavailable);
     expect(useEditDocument).toHaveBeenCalledTimes(2);
   });
 
@@ -482,7 +515,7 @@ describe('Document lifecycle', () => {
     if (published.kind !== 'published') throw new Error('Expected save to succeed');
 
     expect(store.images.get('opaque-document-id')).toEqual(['pasted-image']);
-    expect(lifecycle.useShareDocument('opaque-document-id')).toEqual({
+    expect(readShare(lifecycle, 'opaque-document-id')).toEqual({
       kind: 'available',
       document: {
         id: 'opaque-document-id',
@@ -491,7 +524,7 @@ describe('Document lifecycle', () => {
         imageSources: { 'pasted-image': 'memory://pasted-image' },
       },
     });
-    expect(lifecycle.useShareDocument('unknown')).toEqual(unavailable);
+    expect(readShare(lifecycle, 'unknown')).toEqual(unavailable);
   });
 
   it('does not expose image sources for expired or deleted documents', async () => {
@@ -510,12 +543,12 @@ describe('Document lifecycle', () => {
     if (expired.kind !== 'published') throw new Error('Expected save to succeed');
 
     now = expiry;
-    expect(lifecycle.useShareDocument('live-id')).toMatchObject({
+    expect(readShare(lifecycle, 'live-id')).toMatchObject({
       kind: 'available',
       document: { imageSources: { 'secret-image': 'memory://secret-image' } },
     });
-    expect(lifecycle.useShareDocument(expired.document.id)).toEqual(unavailable);
-    expect(lifecycle.useEditDocument(expired.document.id, 'owner-user')).toEqual(unavailable);
+    expect(readShare(lifecycle, expired.document.id)).toEqual(unavailable);
+    expect(readEdit(lifecycle, expired.document.id, 'owner-user')).toEqual(unavailable);
   });
 
   it('lets the owner grant and revoke another signed-in creator without changing the share link', async () => {
@@ -526,18 +559,18 @@ describe('Document lifecycle', () => {
     if (published.kind !== 'published') throw new Error('Expected save to succeed');
 
     await expect(lifecycle.grantEditor(published.document, 'editor@example.com')).resolves.toEqual({ kind: 'granted' });
-    expect(lifecycle.useEditDocument('opaque-document-id', 'editor-user')).toMatchObject({
+    expect(readEdit(lifecycle, 'opaque-document-id', 'editor-user')).toMatchObject({
       kind: 'available',
       document: { id: 'opaque-document-id', role: 'editor', markdown: '# Release notes' },
     });
-    expect(lifecycle.useShareDocument('opaque-document-id')).toMatchObject({
+    expect(readShare(lifecycle, 'opaque-document-id')).toMatchObject({
       kind: 'available',
       document: { id: 'opaque-document-id', markdown: '# Release notes' },
     });
 
     await expect(lifecycle.revokeEditor(published.document, 'editor-user')).resolves.toEqual({ kind: 'revoked' });
-    expect(lifecycle.useEditDocument('opaque-document-id', 'editor-user')).toEqual(unavailable);
-    expect(lifecycle.useEditDocument('opaque-document-id', 'owner-user')).toMatchObject({
+    expect(readEdit(lifecycle, 'opaque-document-id', 'editor-user')).toEqual(unavailable);
+    expect(readEdit(lifecycle, 'opaque-document-id', 'owner-user')).toMatchObject({
       kind: 'available',
       document: { role: 'owner' },
     });
@@ -557,8 +590,8 @@ describe('Document lifecycle', () => {
 
     await lifecycle.delete(published.document);
 
-    expect(lifecycle.useEditDocument(published.document.id, 'owner-user')).toEqual(unavailable);
-    expect(lifecycle.useShareDocument(published.document.id)).toEqual(unavailable);
+    expect(readEdit(lifecycle, published.document.id, 'owner-user')).toEqual(unavailable);
+    expect(readShare(lifecycle, published.document.id)).toEqual(unavailable);
   });
 
   it('deletes due image files while keeping an available document and rewrites stored markdown', async () => {
@@ -575,7 +608,7 @@ describe('Document lifecycle', () => {
     if (published.kind !== 'published') throw new Error('Expected save to succeed');
 
     now = new Date(dueAt.getTime() - 1);
-    expect(lifecycle.useShareDocument('doc-id')).toMatchObject({
+    expect(readShare(lifecycle, 'doc-id')).toMatchObject({
       kind: 'available',
       document: { imageSources: { sketch: 'memory://sketch' } },
     });
@@ -588,11 +621,11 @@ describe('Document lifecycle', () => {
     });
     expect(store.images.has('doc-id')).toBe(false);
     expect(store.documents.get('doc-id')?.markdown).toBe('# Notes\n\n*[Removed image: sketch.png]*');
-    expect(lifecycle.useShareDocument('doc-id')).toMatchObject({
+    expect(readShare(lifecycle, 'doc-id')).toMatchObject({
       kind: 'available',
       document: { markdown: '# Notes\n\n*[Removed image: sketch.png]*' },
     });
-    const shareOutcome = lifecycle.useShareDocument('doc-id');
+    const shareOutcome = readShare(lifecycle, 'doc-id');
     expect(shareOutcome.kind === 'available' ? shareOutcome.document.imageSources : undefined).toBeUndefined();
   });
 

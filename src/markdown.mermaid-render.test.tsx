@@ -1,49 +1,41 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { ORDINARY_FLOWCHART_MARKDOWN } = vi.hoisted(() => {
-  const source = [
-    'flowchart LR',
-    '    A[User] --> B{Intent?}',
-    '    B -->|Code| C[Editor]',
-    '    B -->|Chat| D[Composer]',
-    '    B -->|Agent| E[Cursor Agent]',
-    '    C --> F[LSP]',
-    '    D --> G[Context]',
-    '    E --> H[Tools]',
-    '    F --> I[Model]',
-    '    G --> I',
-    '    H --> I',
-    '    I --> J[Apply]',
-    '    J --> K[Review]',
-    '    K -->|Accept| L[Done]',
-    '    K -->|Reject| M[Retry]',
-    '    M --> E',
-  ].join('\n');
-  return { ORDINARY_FLOWCHART_MARKDOWN: `\`\`\`mermaid\n${source}\n\`\`\`` };
-});
-
-vi.mock('./lib/instant-document-persistence', () => ({
-  documentLifecycle: {
-    useShareDocument: (id: string) => (
-      id === 'flowchart-doc'
-        ? {
-          kind: 'available',
-          document: {
-            id,
-            title: 'Untitled document',
-            markdown: ORDINARY_FLOWCHART_MARKDOWN,
-          },
-        }
-        : { kind: 'unavailable' }
-    ),
-    useEditDocument: () => ({ kind: 'unavailable' }),
-    useCreatorLibrary: () => ({ loading: false, owned: [], granted: [] }),
-  },
-}));
-
 import { App } from './App';
+import { createDocumentLifecycle } from './document-lifecycle';
 import { interpretMarkdown, MarkdownView } from './markdown';
+import { createMemoryDocumentStore } from './test/memory-document-store';
+
+const source = [
+  'flowchart LR',
+  '    A[User] --> B{Intent?}',
+  '    B -->|Code| C[Editor]',
+  '    B -->|Chat| D[Composer]',
+  '    B -->|Agent| E[Cursor Agent]',
+  '    C --> F[LSP]',
+  '    D --> G[Context]',
+  '    E --> H[Tools]',
+  '    F --> I[Model]',
+  '    G --> I',
+  '    H --> I',
+  '    I --> J[Apply]',
+  '    J --> K[Review]',
+  '    K -->|Accept| L[Done]',
+  '    K -->|Reject| M[Retry]',
+  '    M --> E',
+].join('\n');
+const ORDINARY_FLOWCHART_MARKDOWN = '```mermaid\n' + source + '\n```';
+
+// A real lifecycle over the memory adapter, bound through the same seam production
+// binds Instant through — no module mocking.
+const flowchartStore = createMemoryDocumentStore();
+flowchartStore.addDocument({
+  id: 'flowchart-doc',
+  title: 'Untitled document',
+  markdown: ORDINARY_FLOWCHART_MARKDOWN,
+  updatedAt: new Date(),
+});
+const testLifecycle = createDocumentLifecycle(flowchartStore, () => 'generated-id');
 
 const svgProto = SVGElement.prototype;
 const originalGetComputedTextLength = Object.getOwnPropertyDescriptor(svgProto, 'getComputedTextLength');
@@ -123,7 +115,7 @@ describe('Mermaid real render', () => {
 
   it('draws that flowchart on a Share Link', async () => {
     window.history.replaceState({}, '', '/s/flowchart-doc');
-    render(<App />);
+    render(<App lifecycle={testLifecycle} />);
 
     expect(await screen.findByText('Read only')).toBeInTheDocument();
     expect(document.querySelector('.reader-content')).toBeTruthy();

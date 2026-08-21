@@ -1,10 +1,9 @@
 import { init } from '@instantdb/admin';
-import { documentImagePrefix, imageIdFromPath } from '../src/document-image';
 import type { DocumentRemovalStore, RemovableDocument, StoredImage } from '../src/document-lifecycle';
-import { instantAvailability, toDate, type InstantDate } from '../src/instant-wire';
+import { instantAvailability, ownedImageFiles, toDate, type InstantDate } from '../src/instant-wire';
 
-// `$files.id` is an Instant storage id, not the image id the editor handed out. Each
-// document keeps its own map of the two, and neither the map nor the storage ids leave here.
+// `$files.id` is an Instant storage id, not the image id the editor handed out. The path
+// pairing lives in `ownedImageFiles`; only the file-id map stays behind this seam.
 type InstantFile = { id: string; path?: string | null; expiresAt?: InstantDate | null };
 type InstantDocument = {
   id: string;
@@ -14,15 +13,9 @@ type InstantDocument = {
 };
 
 export function ownedFiles(documentId: string, files: InstantFile[]) {
-  const prefix = documentImagePrefix(documentId);
-  const owned = new Map<string, { fileId: string; expiresAt: Date | null }>();
-  for (const file of files) {
-    const imageId = imageIdFromPath(documentId, file.path ?? '');
-    if (imageId && file.path?.startsWith(prefix)) {
-      owned.set(imageId, { fileId: file.id, expiresAt: toDate(file.expiresAt) });
-    }
-  }
-  return owned;
+  return new Map(ownedImageFiles(documentId, files).map(({ imageId, file }) => (
+    [imageId, { fileId: file.id, expiresAt: toDate(file.expiresAt) }]
+  )));
 }
 
 export function createInstantRemovalStore(

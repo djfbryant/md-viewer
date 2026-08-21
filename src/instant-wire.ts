@@ -1,3 +1,4 @@
+import { imageIdFromPath } from './document-image';
 import type { DocumentAvailability } from './document-lifecycle';
 
 /**
@@ -18,4 +19,19 @@ export function instantAvailability(
   row: { expiresAt?: InstantDate | null; deletedAt?: InstantDate | null },
 ): DocumentAvailability {
   return { expiresAt: toDate(row.expiresAt), deletedAt: toDate(row.deletedAt) };
+}
+
+/**
+ * The one mapping from Instant storage rows to the images a Document owns, keyed by the
+ * image id the editor handed out. Both adapters read through this so the path scheme is
+ * parsed in exactly one place; what each does with its own file rows stays behind its seam.
+ */
+export function ownedImageFiles<T extends { path?: string | null }>(
+  documentId: string,
+  files: T[] | null | undefined,
+): Array<{ imageId: string; file: T }> {
+  return (files ?? []).flatMap((file) => {
+    const imageId = imageIdFromPath(documentId, file.path ?? '');
+    return imageId ? [{ imageId, file }] : [];
+  });
 }

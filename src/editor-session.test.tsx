@@ -1,36 +1,38 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const documents = vi.hoisted(() => new Map<string, { id: string; title: string; markdown: string; role?: 'owner' | 'editor'; editors?: Array<{ userId: string; email: string }> }>());
-const publishDocument = vi.hoisted(() => vi.fn(async (markdown: string, existing?: { id: string }): Promise<{ kind: 'published'; document: { id: string; title: string; markdown: string; role: 'owner'; editors: [] } } | { kind: 'failed' } | { kind: 'rate-limited'; limit: 'create' | 'upload' }> => {
+import { App } from './App';
+import type { ClubSession } from './club-auth';
+import type { DocumentLifecycle } from './document-lifecycle';
+
+const documents = new Map<string, { id: string; title: string; markdown: string; role?: 'owner' | 'editor'; editors?: Array<{ userId: string; email: string }> }>();
+
+const publishDocument = vi.fn(async (markdown: string, existing?: { id: string }): Promise<{ kind: 'published'; document: { id: string; title: string; markdown: string; role: 'owner'; editors: [] } } | { kind: 'failed' } | { kind: 'rate-limited'; limit: 'create' | 'upload' }> => {
   const document = { id: existing?.id ?? 'saved-document', title: 'Saved document', markdown, role: 'owner' as const, editors: [] as [] };
   documents.set(document.id, document);
   return { kind: 'published' as const, document };
-}));
+});
 
-vi.mock('./lib/instant-document-persistence', () => ({
-  documentLifecycle: {
-    attachImage: () => ({ kind: 'unsupported' as const }),
-    save: publishDocument,
-    delete: vi.fn(async () => ({ kind: 'deleted' as const })),
-    grantEditor: vi.fn(async () => ({ kind: 'unknown' as const })),
-    revokeEditor: vi.fn(async () => ({ kind: 'revoked' as const })),
-    useCreatorLibrary: () => ({ loading: false, owned: [], granted: [] }),
-    useClubCreators: () => [],
-    useShareDocument: (id: string) => {
-      const document = documents.get(id);
-      return document ? { kind: 'available', document: { id: document.id, title: document.title, markdown: document.markdown } } : { kind: 'unavailable' };
-    },
-    useEditDocument: (id: string, userId: string | null) => {
-      if (!id || !userId) return { kind: 'unavailable' };
-      const document = documents.get(id);
-      return document ? { kind: 'available', document: { ...document, role: document.role ?? 'owner', editors: document.editors ?? [] } } : { kind: 'unavailable' };
-    },
+// A stand-in bound through the same seam production binds Instant through. Save is
+// replaced so these tests can stage outcomes; every hook answers from `documents`.
+const stubLifecycle = {
+  attachImage: () => ({ kind: 'unsupported' as const }),
+  save: publishDocument,
+  delete: vi.fn(async () => ({ kind: 'deleted' as const })),
+  grantEditor: vi.fn(async () => ({ kind: 'unknown' as const })),
+  revokeEditor: vi.fn(async () => ({ kind: 'revoked' as const })),
+  useCreatorLibrary: () => ({ loading: false, owned: [], granted: [] }),
+  useClubCreators: () => [],
+  useShareDocument: (id: string) => {
+    const document = documents.get(id);
+    return document ? { kind: 'available', document: { id: document.id, title: document.title, markdown: document.markdown } } : { kind: 'unavailable' };
   },
-}));
-
-import { App } from './App';
-import type { ClubSession } from './club-auth';
+  useEditDocument: (id: string, userId: string | null) => {
+    if (!id || !userId) return { kind: 'unavailable' };
+    const document = documents.get(id);
+    return document ? { kind: 'available', document: { ...document, role: document.role ?? 'owner', editors: document.editors ?? [] } } : { kind: 'unavailable' };
+  },
+} as unknown as DocumentLifecycle;
 
 const creatorClub: ClubSession = {
   status: 'signed-in',
@@ -38,7 +40,7 @@ const creatorClub: ClubSession = {
   isCreator: true,
 };
 
-const renderCreatorApp = () => render(<App club={creatorClub} />);
+const renderCreatorApp = () => render(<App club={creatorClub} lifecycle={stubLifecycle} />);
 const newDraftKey = 'markshare-editor-recovery-v1:writer@example.com:new';
 
 beforeEach(() => {

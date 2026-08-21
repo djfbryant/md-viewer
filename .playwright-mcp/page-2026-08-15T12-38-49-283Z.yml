@@ -1,0 +1,10 @@
+- generic [ref=e1]:
+  - main [ref=e17]:
+    - generic [ref=e18]:
+      - generic [ref=e19]: MarkShare
+      - 'button "Theme: light. Change theme" [active] [ref=e28] [cursor=pointer]':
+        - generic [ref=e24]: ☀
+    - generic [ref=e25]:
+      - heading "Document unavailable" [level=1] [ref=e26]
+      - paragraph [ref=e27]: This share link is invalid or the document is no longer available.
+  - button [ref=e13] [cursor=pointer]

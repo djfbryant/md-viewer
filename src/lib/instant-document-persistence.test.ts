@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { createElement, useCallback } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,6 +22,11 @@ const documentId = '52567466-9a13-483a-9e62-335adaf3ca72';
 afterEach(cleanup);
 
 describe('Instant share lookup', () => {
+  function Probe({ id }: { id: string }) {
+    const outcome = documentLifecycle.useShareDocument(id);
+    return createElement('div', null, JSON.stringify(outcome));
+  }
+
   beforeEach(() => {
     useQuery.mockReset();
     useQuery.mockReturnValue({
@@ -35,7 +40,7 @@ describe('Instant share lookup', () => {
   });
 
   it('queries the document by id and passes knownDocumentId', () => {
-    const outcome = documentLifecycle.useShareDocument(documentId);
+    render(createElement(Probe, { id: documentId }));
 
     expect(useQuery).toHaveBeenCalledWith(
       {
@@ -44,7 +49,7 @@ describe('Instant share lookup', () => {
       },
       { ruleParams: { knownDocumentId: documentId } },
     );
-    expect(outcome).toMatchObject({ kind: 'available', document: { id: documentId, markdown: '# Notes' } });
+    expect(JSON.parse(screen.getByText(/kind/).textContent!)).toMatchObject({ kind: 'available', document: { id: documentId, markdown: '# Notes' } });
   });
 
   it('treats a share lookup error as unavailable without disclosing the document', () => {
@@ -54,11 +59,12 @@ describe('Instant share lookup', () => {
       isLoading: false,
     });
 
-    expect(documentLifecycle.useShareDocument(documentId)).toEqual({ kind: 'unavailable' });
+    render(createElement(Probe, { id: documentId }));
     expect(useQuery).toHaveBeenCalledWith(
       expect.anything(),
       { ruleParams: { knownDocumentId: documentId } },
     );
+    expect(screen.getByText(/kind/).textContent).toBe(JSON.stringify({ kind: 'unavailable' }));
   });
 });
 

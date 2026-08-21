@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type FocusEvent, type MouseEvent } from 'react';
 import { ClubProvider, sendMagicCode, signInWithMagicCode, signOutClub, useClubSession, type ClubSession } from './club-auth';
 import { formatExpiry, toDatetimeLocalValue } from './document';
-import { type SharedDocument } from './document-lifecycle';
+import { DocumentLifecycleProvider, useDocumentLifecycle, type DocumentLifecycle, type SharedDocument } from './document-lifecycle';
 import { MAX_IMAGES_PER_DOCUMENT } from './document-image';
 import { copyToClipboard } from './clipboard';
 import { MAX_SPLIT, MIN_SPLIT, useEditorSession, useEditorSplit } from './editor-session';
@@ -116,8 +116,9 @@ function RenderedDocument({ document, imageSources }: { document: InterpretedMar
 
 function Home({ onCreate, onNavigate }: { onCreate: () => void; onNavigate: (path: string) => void }) {
   const club = useClubSession();
+  const lifecycle = useDocumentLifecycle();
   const userId = club.status === 'signed-in' ? club.user.id : null;
-  const library = documentLifecycle.useCreatorLibrary(userId);
+  const library = lifecycle.useCreatorLibrary(userId);
 
   return (
     <main className="home-shell">
@@ -319,6 +320,7 @@ function Editor({
   documentId?: string;
 }) {
   const club = useClubSession();
+  const lifecycle = useDocumentLifecycle();
   const userId = club.status === 'signed-in' ? club.user.id : null;
   const [tab, setTab] = useState<'write' | 'preview'>('write');
   const [shareOpen, setShareOpen] = useState(false);
@@ -326,10 +328,10 @@ function Editor({
   const [copyNotice, setCopyNotice] = useState<{ id: number; message: string } | null>(null);
   const [grantEmail, setGrantEmail] = useState('');
   const [grantError, setGrantError] = useState<string | null>(null);
-  const remote = documentLifecycle.useEditDocument(documentId ?? '', userId);
+  const remote = lifecycle.useEditDocument(documentId ?? '', userId);
   const existing = documentId && remote.kind === 'available' ? remote.document : undefined;
   const session = useEditorSession(
-    documentLifecycle,
+    lifecycle,
     existing,
     club.status === 'signed-in' ? club.user.email : null,
     club.status === 'signed-in' ? club.user.id : undefined,
@@ -477,13 +479,13 @@ function Editor({
               {(existing?.editors ?? []).map((editor) => (
                 <div className="dialog-row" key={editor.userId}>
                   <span>{editor.email}</span>
-                  <button className="button button--small" onClick={() => { void documentLifecycle.revokeEditor({ id: session.publishedId! }, editor.userId); }}>Remove</button>
+                  <button className="button button--small" onClick={() => { void lifecycle.revokeEditor({ id: session.publishedId! }, editor.userId); }}>Remove</button>
                 </div>
               ))}
               <form className="dialog-row" onSubmit={(event) => {
                 event.preventDefault();
                 setGrantError(null);
-                void documentLifecycle.grantEditor({ id: session.publishedId! }, grantEmail).then((outcome) => {
+                 void lifecycle.grantEditor({ id: session.publishedId! }, grantEmail).then((outcome) => {
                   if (outcome.kind === 'granted') setGrantEmail('');
                   else setGrantError('That person needs to be an invited creator who has already signed in.');
                 });
@@ -553,20 +555,11 @@ function MissingDocument() {
 
 function ShareRoute({ documentId, onEdit }: { documentId: string; onEdit: (id: string) => void }) {
   const club = useClubSession();
+  const lifecycle = useDocumentLifecycle();
   const userId = club.status === 'signed-in' ? club.user.id : null;
-  const [, setTick] = useState(0);
-  const outcome = documentLifecycle.useShareDocument(documentId);
-  const editable = documentLifecycle.useEditDocument(documentId, userId);
-
-  useEffect(() => {
-    if (outcome.kind !== 'available' || !outcome.document.expiresAt) return;
-    const delay = outcome.document.expiresAt.getTime() - Date.now();
-    const timeout = window.setTimeout(
-      () => setTick((tick) => tick + 1),
-      Math.min(Math.max(0, delay), 2_147_483_647),
-    );
-    return () => window.clearTimeout(timeout);
-  }, [outcome]);
+  // The lifecycle owns expiry: the outcome flips to unavailable on its own at the date.
+  const outcome = lifecycle.useShareDocument(documentId);
+  const editable = lifecycle.useEditDocument(documentId, userId);
 
   if (outcome.kind === 'loading') return <ReaderLayout><section className="reader-message"><p>Opening document…</p></section></ReaderLayout>;
   return outcome.kind === 'available'
@@ -637,6 +630,14 @@ function CurrentRoute() {
   return <Home onCreate={() => navigate(EDITOR_PATH)} onNavigate={navigate} />;
 }
 
-export function App({ club }: { club?: ClubSession } = {}) {
-  return <ThemeProvider><ClubProvider session={club}><CurrentRoute /></ClubProvider></ThemeProvider>;
+export function App({ club, lifecycle = documentLifecycle }: { club?: ClubSession; lifecycle?: DocumentLifecycle } = {}) {
+  return (
+    <ThemeProvider>
+      <ClubProvider session={club}>
+        <DocumentLifecycleProvider value={lifecycle}>
+          <CurrentRoute />
+        </DocumentLifecycleProvider>
+      </ClubProvider>
+    </ThemeProvider>
+  );
 }
