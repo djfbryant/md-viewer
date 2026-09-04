@@ -221,4 +221,64 @@ describe('editor session', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     expect(screen.getByRole('textbox', { name: 'Markdown document' })).toHaveValue('# Tabs');
   });
+
+  it('follows the caret and preview blocks only when position sync is enabled', () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+
+    try {
+      renderCreatorApp();
+      const source = '# First\n\nFirst text\n\n# Second\n\nSecond text';
+      const editor = screen.getByRole('textbox', { name: 'Markdown document' }) as HTMLTextAreaElement;
+      fireEvent.change(editor, { target: { value: source } });
+      const toggle = screen.getByRole('checkbox', { name: 'Sync position' });
+
+      expect(toggle).not.toBeChecked();
+      scrollIntoView.mockClear();
+      editor.setSelectionRange(source.indexOf('Second text'), source.indexOf('Second text'));
+      fireEvent.select(editor);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      fireEvent.click(toggle);
+      scrollIntoView.mockClear();
+      editor.setSelectionRange(source.indexOf('Second text'), source.indexOf('Second text'));
+      fireEvent.select(editor);
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center', inline: 'nearest' });
+
+      scrollIntoView.mockClear();
+      fireEvent.scroll(screen.getByLabelText('Document preview').querySelector('.preview')!);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByText('Second text'));
+      expect(editor).toHaveFocus();
+      expect(editor.selectionStart).toBe(source.indexOf('Second text'));
+      expect(editor.selectionEnd).toBe(source.indexOf('Second text'));
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: originalScrollIntoView });
+    }
+  });
+
+  it('re-applies the current position when the preview tab opens', () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+
+    try {
+      renderCreatorApp();
+      const source = '# First\n\nFirst text\n\n# Second\n\nSecond text';
+      const editor = screen.getByRole('textbox', { name: 'Markdown document' }) as HTMLTextAreaElement;
+      fireEvent.change(editor, { target: { value: source } });
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Sync position' }));
+      editor.setSelectionRange(source.indexOf('Second text'), source.indexOf('Second text'));
+      fireEvent.select(editor);
+      scrollIntoView.mockClear();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center', inline: 'nearest' });
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: originalScrollIntoView });
+    }
+  });
 });

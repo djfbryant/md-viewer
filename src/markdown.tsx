@@ -42,6 +42,10 @@ function headingText(node: PhrasingContent): string {
   return '';
 }
 
+function normalizeLineEndings(source: string) {
+  return source.replace(/\r\n?/g, '\n');
+}
+
 function titleFrom(tree: MdastRoot) {
   const heading = tree.children.find(
     (node): node is Heading => node.type === 'heading' && node.depth === 1,
@@ -142,6 +146,11 @@ type MermaidOverflowCue = 'none' | 'start' | 'end' | 'both';
 type MermaidPresentation = {
   onExpand?: MermaidExpandHandler;
   openMermaidId?: string;
+};
+
+type SourceDataProps = {
+  'data-source-start'?: string;
+  'data-source-end'?: string;
 };
 
 const MermaidExpandContext = createContext<MermaidPresentation>({});
@@ -255,7 +264,7 @@ function sameSizingDecision(left: MermaidSizingDecision | null, right: MermaidSi
     && left?.effectiveWidth === right?.effectiveWidth;
 }
 
-function MermaidDiagram({ source }: { source: string }) {
+function MermaidDiagram({ source, sourceProps }: { source: string; sourceProps?: SourceDataProps }) {
   const reactId = useId();
   const { onExpand: onMermaidExpand, openMermaidId } = useContext(MermaidExpandContext);
   const viewerOpen = openMermaidId === reactId;
@@ -369,7 +378,7 @@ function MermaidDiagram({ source }: { source: string }) {
 
     // An expanded viewer renders this same SVG. Keep the origin control
     // mounted for focus restoration, but remove the ID-bearing inline SVG.
-    if (viewerOpen) return <figure className="mermaid-diagram" aria-label="Mermaid diagram expanded">
+    if (viewerOpen) return <figure {...sourceProps} className="mermaid-diagram" aria-label="Mermaid diagram expanded">
       <figcaption className="mermaid-diagram__toolbar">
         <span className="mermaid-diagram__label">Mermaid diagram</span>
         {expandControl}
@@ -377,6 +386,7 @@ function MermaidDiagram({ source }: { source: string }) {
     </figure>;
 
     return <figure
+      {...sourceProps}
       className={`mermaid-diagram${wide ? ' mermaid-diagram--wide' : ''}${sizing?.overflows ? ' mermaid-diagram--overflowing' : ''}`}
       data-mermaid-scale={sizing?.effectiveScale}
       data-mermaid-wide={wide || undefined}
@@ -402,7 +412,7 @@ function MermaidDiagram({ source }: { source: string }) {
   }
 
   if (state.kind === 'invalid') {
-    return <figure className="mermaid-fallback">
+    return <figure {...sourceProps} className="mermaid-fallback">
       <figcaption>{state.reason === 'blocked'
         ? 'This diagram could not be rendered safely.'
         : 'This diagram could not be displayed.'}</figcaption>
@@ -410,7 +420,7 @@ function MermaidDiagram({ source }: { source: string }) {
     </figure>;
   }
 
-  return <div className="mermaid-loading" role="status">Rendering diagram…</div>;
+  return <div {...sourceProps} className="mermaid-loading" role="status">Rendering diagram…</div>;
 }
 
 function mermaidSource(children: ReactNode) {
@@ -484,11 +494,39 @@ const markdownComponents: NonNullable<RehypeReactOptions['components']> = {
       : <span>{children}</span>;
   },
   img: MarkdownImage,
-  pre({ children }) {
+  pre({ children, ...props }) {
     const source = mermaidSource(children);
-    return source === null ? <pre>{children}</pre> : <MermaidDiagram source={source} />;
+    if (source === null) return <pre {...props}>{children}</pre>;
+    return <MermaidDiagram
+      source={source}
+      sourceProps={{
+        'data-source-start': typeof props['data-source-start'] === 'string' ? props['data-source-start'] : undefined,
+        'data-source-end': typeof props['data-source-end'] === 'string' ? props['data-source-end'] : undefined,
+      }}
+    />;
   },
 };
+
+const sourceBlockTags = new Set(['blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'li', 'ol', 'p', 'pre', 'table', 'ul']);
+
+function addSourcePositionData(tree: HastRoot) {
+  const visit = (node: HastRoot | Element) => {
+    if (node.type === 'element') {
+      const start = node.position?.start.offset;
+      const end = node.position?.end.offset;
+      if (sourceBlockTags.has(node.tagName) && Number.isInteger(start) && Number.isInteger(end)) {
+        node.properties['data-source-start'] = String(start);
+        node.properties['data-source-end'] = String(end);
+      }
+    }
+    if ('children' in node) {
+      for (const child of node.children) {
+        if (child.type === 'element') visit(child);
+      }
+    }
+  };
+  visit(tree);
+}
 
 const markdownProcessor = unified()
   .use(remarkParse)
@@ -498,10 +536,14 @@ const markdownProcessor = unified()
   .use(rehypeHighlight, { plainText: ['mermaid'] })
   .use(rehypeReact, { Fragment, components: markdownComponents, jsx, jsxs });
 
-export function interpretMarkdown(source: string): InterpretedMarkdown {
-  const tree = markdownProcessor.parse(source) as MdastRoot;
+export function interpretMarkdown(source: string, options: { includeSourcePositions?: boolean } = {}): InterpretedMarkdown {
+  // Textarea values use LF line endings even when imported Markdown used CRLF.
+  // Parse the same representation when source positions are part of the output.
+  const parsedSource = options.includeSourcePositions ? normalizeLineEndings(source) : source;
+  const tree = markdownProcessor.parse(parsedSource) as MdastRoot;
   const title = titleFrom(tree);
-  const renderedTree = markdownProcessor.runSync(tree);
+  const renderedTree = markdownProcessor.runSync(tree) as HastRoot;
+  if (options.includeSourcePositions) addSourcePositionData(renderedTree);
   const content = markdownProcessor.stringify(renderedTree) as ReactNode;
 
   return {

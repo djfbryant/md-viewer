@@ -74,6 +74,29 @@ describe('Markdown interpretation', () => {
     expect(interpretMarkdown('# Hello <b>world</b>').title).toBe('Hello world');
   });
 
+  it('adds source ranges to rendered blocks when position data is requested', () => {
+    const source = '# First\n\nParagraph with **emphasis**.\n\n- One\n- Two';
+    const { container } = render(<MarkdownView document={interpretMarkdown(source, { includeSourcePositions: true })} />);
+
+    expect(screen.getByRole('heading', { name: 'First' })).toHaveAttribute('data-source-start', '0');
+    expect(container.querySelector('p')).toHaveAttribute('data-source-start', String(source.indexOf('Paragraph')));
+    expect(screen.getByText('One')).toHaveAttribute('data-source-start', String(source.indexOf('- One')));
+    expect(container.querySelector('strong')).not.toHaveAttribute('data-source-start');
+  });
+
+  it('does not add source ranges to the normal read-only rendering', () => {
+    const { container } = render(<MarkdownView document={interpretMarkdown('# First')} />);
+
+    expect(container.querySelector('[data-source-start]')).toBeNull();
+  });
+
+  it('uses textarea-compatible offsets for source ranges with CRLF line endings', () => {
+    const source = '# First\r\n\r\n# Second';
+    render(<MarkdownView document={interpretMarkdown(source, { includeSourcePositions: true })} />);
+
+    expect(screen.getByRole('heading', { name: 'Second' })).toHaveAttribute('data-source-start', String('# First\n\n'.length));
+  });
+
   it('renders GitHub-style tables, task lists, footnotes, and highlighted code', () => {
     const { container } = render(<MarkdownView document={interpretMarkdown([
       '| Item | State |',

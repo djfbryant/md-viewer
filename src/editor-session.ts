@@ -223,9 +223,9 @@ export function useEditorSession(
     }
   }, [creatorEmail, handle, lifecycle]);
 
-  const attachFiles = useCallback((files: File[], insertAt?: { start: number; end: number }) => {
+  const attachFiles = useCallback((files: File[], insertAt?: { start: number; end: number }): boolean => {
     const images = files.filter((file) => file.type.startsWith('image/'));
-    if (!images.length) return;
+    if (!images.length) return false;
 
     let nextCount = imageCount;
     const attached: PendingImage[] = [];
@@ -249,10 +249,11 @@ export function useEditorSession(
         uploaded: false,
       });
     }
-    if (!attached.length) return;
+    if (!attached.length) return false;
     setPendingImages((current) => [...current, ...attached]);
     const snippet = snippets.join('\n\n');
     setMarkdown((current) => insertSnippet(current, snippet, insertAt?.start ?? current.length, insertAt?.end ?? insertAt?.start ?? current.length));
+    return true;
   }, [imageCount, lifecycle]);
 
   const importMarkdown = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {

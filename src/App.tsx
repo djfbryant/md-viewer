@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type FocusEvent, type MouseEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type FocusEvent, type MouseEvent } from 'react';
 import { ClubProvider, sendMagicCode, signInWithMagicCode, signOutClub, useClubSession, type ClubSession } from './club-auth';
 import { formatExpiry, toDatetimeLocalValue } from './document';
 import { DocumentLifecycleProvider, useDocumentLifecycle, type DocumentLifecycle, type SharedDocument } from './document-lifecycle';
 import { MAX_IMAGES_PER_DOCUMENT } from './document-image';
 import { copyToClipboard } from './clipboard';
 import { MAX_SPLIT, MIN_SPLIT, useEditorSession, useEditorSplit } from './editor-session';
+import { findSourceBlockAtOffset, scrollSourceBlockIntoView, sourceOffsetForEditorOffset, sourceOffsetFromPreviewTarget } from './editor-position-sync';
 import { documentLifecycle } from './lib/instant-document-persistence';
 import { downloadMarkdown, interpretMarkdown, MarkdownView, type InterpretedMarkdown, type MermaidExpandRequest } from './markdown';
 import { MermaidViewer } from './mermaid-viewer';
@@ -323,6 +324,7 @@ function Editor({
   const lifecycle = useDocumentLifecycle();
   const userId = club.status === 'signed-in' ? club.user.id : null;
   const [tab, setTab] = useState<'write' | 'preview'>('write');
+  const [syncPosition, setSyncPosition] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [copyNotice, setCopyNotice] = useState<{ id: number; message: string } | null>(null);
@@ -338,12 +340,84 @@ function Editor({
   );
   const split = useEditorSplit();
   const { markdown, isSaving, save, imageCount, imageSources, attachFiles } = session;
-  const interpreted = useMemo(() => interpretMarkdown(markdown), [markdown]);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const pendingEditorOffset = useRef<number | null>(null);
+  const pendingMobileFocusOffset = useRef<number | null>(null);
+  const interpreted = useMemo(
+    () => interpretMarkdown(markdown, { includeSourcePositions: syncPosition }),
+    [markdown, syncPosition],
+  );
   const isOwner = !documentId || existing?.role === 'owner';
 
+  const scrollPreviewToOffset = useCallback((offset: number) => {
+    const preview = previewRef.current;
+    if (!preview) return;
+    scrollSourceBlockIntoView(findSourceBlockAtOffset(preview, offset));
+  }, []);
+
+  const syncPreviewToEditor = useCallback((editor: HTMLTextAreaElement, deferUntilRender = false, offsetOverride?: number) => {
+    if (!syncPosition) return;
+    const offset = offsetOverride ?? editor.selectionStart;
+    pendingEditorOffset.current = deferUntilRender ? offset : null;
+    scrollPreviewToOffset(offset);
+  }, [scrollPreviewToOffset, syncPosition]);
+
+  useLayoutEffect(() => {
+    if (!syncPosition) {
+      pendingEditorOffset.current = null;
+      return;
+    }
+    const editor = editorRef.current;
+    const preview = previewRef.current;
+    if (!editor || !preview) return;
+    const offset = pendingEditorOffset.current ?? editor.selectionStart;
+    pendingEditorOffset.current = null;
+    scrollPreviewToOffset(offset);
+  }, [interpreted, scrollPreviewToOffset, syncPosition, tab]);
+
+  useLayoutEffect(() => {
+    if (tab !== 'write') return;
+    const offset = pendingMobileFocusOffset.current;
+    const editor = editorRef.current;
+    if (offset === null || !editor) return;
+    pendingMobileFocusOffset.current = null;
+    editor.focus();
+    editor.setSelectionRange(offset, offset);
+  }, [tab]);
+
+  const focusEditorAtSourceOffset = useCallback((offset: number) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (window.matchMedia('(max-width: 899px)').matches && tab !== 'write') {
+      pendingMobileFocusOffset.current = offset;
+      setTab('write');
+      return;
+    }
+    editor.focus();
+    editor.setSelectionRange(offset, offset);
+  }, [tab]);
+
+  const handlePreviewClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (!syncPosition) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('a, button, input, select, textarea')) return;
+    const offset = sourceOffsetFromPreviewTarget(event.currentTarget, event.target);
+    if (offset === null) return;
+    focusEditorAtSourceOffset(offset);
+  }, [focusEditorAtSourceOffset, syncPosition]);
+
   const insertFiles = useCallback((files: File[], target: HTMLTextAreaElement) => {
-    attachFiles(files, { start: target.selectionStart, end: target.selectionEnd });
-  }, [attachFiles]);
+    const editorStart = target.selectionStart;
+    const editorEnd = target.selectionEnd;
+    const normalizedMarkdown = markdown.replace(/\r\n?/g, '\n');
+    const insertedBlockOffset = editorStart > 0 && normalizedMarkdown[editorStart - 1] !== '\n' ? editorStart + 2 : editorStart;
+    const attached = attachFiles(files, {
+      start: sourceOffsetForEditorOffset(markdown, editorStart),
+      end: sourceOffsetForEditorOffset(markdown, editorEnd),
+    });
+    if (attached) syncPreviewToEditor(target, true, insertedBlockOffset);
+  }, [attachFiles, markdown, syncPreviewToEditor]);
 
   const publish = useCallback(async (options?: { expiresAt?: Date | null }) => {
     const outcome = await save(options);
@@ -415,13 +489,31 @@ function Editor({
       </nav>
       <div className="panes" ref={split.panesRef} style={{ '--split': `${split.split}%` } as React.CSSProperties}>
         <section className="pane pane-write" aria-label="Markdown editor">
-          <div className="pane-head"><span className="label">Write</span></div>
+          <div className="pane-head">
+            <span className="label">Write</span>
+            <label className="sync-toggle">
+              <input
+                type="checkbox"
+                aria-label="Sync position"
+                checked={syncPosition}
+                onChange={(event) => setSyncPosition(event.target.checked)}
+              />
+              <span>Sync position</span>
+            </label>
+          </div>
           <textarea
+            ref={editorRef}
             aria-label="Markdown document"
             placeholder="# Start writing"
             spellCheck={false}
             value={markdown}
-            onChange={(event) => session.setMarkdown(event.target.value)}
+            onChange={(event) => {
+              session.setMarkdown(event.target.value);
+              syncPreviewToEditor(event.currentTarget, true);
+            }}
+            onSelect={(event) => syncPreviewToEditor(event.currentTarget)}
+            onClick={(event) => syncPreviewToEditor(event.currentTarget)}
+            onKeyUp={(event) => syncPreviewToEditor(event.currentTarget)}
             onPaste={(event) => {
               const files = [...(event.clipboardData?.files ?? [])];
               if (!files.some((file) => file.type.startsWith('image/'))) return;
@@ -442,7 +534,7 @@ function Editor({
         <button className="splitter" onPointerDown={split.startDrag} onPointerMove={split.moveDrag} onPointerUp={split.finishDrag} onPointerCancel={split.finishDrag} onLostPointerCapture={split.finishDrag} onDoubleClick={split.resetSplit} onKeyDown={split.resizeByKeyboard} role="separator" aria-orientation="vertical" aria-label="Resize the write and preview panes" aria-valuenow={Math.round(split.split)} aria-valuemin={MIN_SPLIT} aria-valuemax={MAX_SPLIT} title="Drag to resize · double-click to reset" />
         <section className="pane pane-preview" aria-label="Document preview">
           <div className="pane-head"><span className="label">Preview</span><span className="preview-note">{session.hasUnsavedChanges ? 'not yet published' : 'matches share link'}</span></div>
-          <div className="preview"><article className={markdown ? 'markdown' : 'preview-placeholder'}>{markdown ? <RenderedDocument document={interpreted} imageSources={imageSources} /> : <><h1>Your preview will appear here</h1><p>Write Markdown, then save a read-only share link.</p></>}</article></div>
+          <div className="preview" ref={previewRef} onClick={handlePreviewClick}><article className={markdown ? 'markdown' : 'preview-placeholder'}>{markdown ? <RenderedDocument document={interpreted} imageSources={imageSources} /> : <><h1>Your preview will appear here</h1><p>Write Markdown, then save a read-only share link.</p></>}</article></div>
         </section>
       </div>
       <footer className="status-footer">
